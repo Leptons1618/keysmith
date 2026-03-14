@@ -1,163 +1,135 @@
-"""GUI app to generate/manage SSH keys for Git hosts."""
+"""GUI app to generate and manage SSH keys for Git hosts."""
 
 # pylint: disable=no-name-in-module,missing-function-docstring,missing-class-docstring,attribute-defined-outside-init,too-many-lines
 
+import re
 import sys
 import webbrowser
-from dataclasses import dataclass
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
-from PySide6.QtCore import (
-    QObject, QRunnable, QEasingCurve, Qt, QThreadPool, QUrl, Signal, QSize
-)
-from PySide6.QtCore import QPropertyAnimation, QTimer
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
-from PySide6.QtWidgets import QProgressBar, QStyle
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFrame,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QPlainTextEdit,
-    QStackedWidget,
+    QProgressBar,
+    QPushButton,
     QSplitter,
-    QTabWidget,
-    QToolButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ssh_utils import (
+    KeyAlgorithm,
+    add_key_to_agent,
     generate_key,
+    get_key_fingerprint,
     list_ssh_keys,
     load_public_key,
+    start_ssh_agent,
     test_connections,
-    KeyAlgorithm,
 )
 
 
 GITHUB_SSH_URL = "https://github.com/settings/ssh/new"
 BITBUCKET_SSH_URL = "https://bitbucket.org/account/settings/ssh-keys/"
+STATE_FILE = Path.home() / ".ssh-key-gui-state.json"
 
 
-APP_STYLESHEET = """
-QWidget { font-family: Segoe UI, Inter, Arial; font-size: 10.5pt; }
-QMainWindow { background: #0f1115; }
+LIGHT_STYLESHEET = """
+QWidget { font-family: Segoe UI, Arial; font-size: 10pt; }
+QMainWindow { background-color: #f0f3f8; }
 
-QLabel#Title { font-size: 18pt; font-weight: 650; color: #f3f4f6; }
-QLabel#Subtitle { color: #b8c0cc; }
+QLabel#Title { font-size: 19pt; font-weight: 600; color: #152033; }
+QLabel#Subtitle { color: #4e5d78; }
+QLabel#StepDone { color: #1a7f37; font-weight: 600; }
+QLabel#StepTodo { color: #4e5d78; }
 
 QGroupBox {
-    color: #e8ecf3;
-    border: 1px solid #252a33;
-    border-radius: 12px;
+    color: #152033;
+    border: 1px solid #d5dceb;
+    border-radius: 8px;
     margin-top: 10px;
     padding: 10px;
-    background: #12151b;
+    background: #ffffff;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     left: 10px;
     padding: 0 6px;
-    color: #dbe3ef;
+    color: #4e5d78;
 }
 
-QLineEdit, QPlainTextEdit {
-    background: #0c0f14;
-    border: 1px solid #252a33;
-    border-radius: 10px;
+QLineEdit, QPlainTextEdit, QListWidget, QComboBox {
+    background: #f7f9fd;
+    border: 1px solid #d5dceb;
+    border-radius: 6px;
     padding: 8px;
-    color: #e8ecf3;
-    selection-background-color: #2b5cff;
+    color: #152033;
+    selection-background-color: #1967d2;
 }
 
-QPlainTextEdit { font-family: Consolas, ui-monospace, monospace; font-size: 10pt; }
+QPlainTextEdit { font-family: Consolas, ui-monospace, monospace; font-size: 9.5pt; }
 
 QPushButton {
-    background: #1a2230;
-    border: 1px solid #2a3342;
-    border-radius: 10px;
-    padding: 9px 12px;
-    color: #f3f4f6;
+    background: #f7f9fd;
+    border: 1px solid #d5dceb;
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #152033;
 }
-QPushButton:hover { background: #212b3a; }
-QPushButton:pressed { background: #151c27; }
-QPushButton:disabled { color: #7b8594; background: #141821; border-color: #232936; }
+QPushButton:hover { background: #eef3fb; border-color: #bcc9e0; }
+QPushButton:disabled { color: #8b96ac; background: #f7f9fd; border-color: #e2e8f3; }
 
 QPushButton#Primary {
-    background: #2b5cff;
-    border-color: #2b5cff;
+    background: #1967d2;
+    border-color: #1967d2;
+    color: #ffffff;
 }
-QPushButton#Primary:hover { background: #2551e6; }
+QPushButton#Primary:hover { background: #135abf; }
+
 QPushButton#Danger {
-    background: #2a1618;
-    border-color: #513034;
-    color: #ffd5d8;
+    background: #cf3a2b;
+    border-color: #cf3a2b;
+    color: #ffffff;
 }
-QPushButton#Danger:hover { background: #351b1e; }
-
-QTabWidget::pane { border: 1px solid #252a33; border-radius: 12px; background: #12151b; }
-QTabBar::tab {
-    background: #12151b;
-    border: 1px solid #252a33;
-    padding: 8px 12px;
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
-    color: #cfd6e2;
-    margin-right: 6px;
-}
-QTabBar::tab:selected { background: #151a22; color: #f3f4f6; }
-
-QFrame#Panel { background: transparent; }
-
-QToolButton#Link {
-    background: transparent;
-    border: 1px solid transparent;
-    color: #9bb7ff;
-    padding: 6px 0;
-    text-align: left;
-}
-QToolButton#Link:hover { color: #c7d6ff; }
-
-QStatusBar { background: #0f1115; color: #b8c0cc; }
+QPushButton#Danger:hover { background: #bd3224; }
 
 QFrame#BusyOverlay {
-    background: rgba(15, 17, 21, 240);
+    background: rgba(240, 243, 248, 228);
     border-radius: 14px;
 }
 
 QPushButton#Cancel {
-    background: #3d1f1e;
-    border-color: #5a3230;
-    color: #ffb4b0;
-}
-QPushButton#Cancel:hover { background: #4a2624; }
-
-QToolButton#Toggle {
-    background: #1a2230;
-    border: 1px solid #2a3342;
-    border-radius: 8px;
-    padding: 6px 10px;
-    color: #f3f4f6;
-}
-QToolButton#Toggle:hover { background: #212b3a; }
-QToolButton#Toggle:checked {
-    background: #2b5cff;
-    border-color: #2b5cff;
+    background: #f7f9fd;
+    border-color: #d5dceb;
+    color: #cf3a2b;
 }
 """
 
 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
+
+
+def _valid_key_name(name: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9._-]+", name))
 
 
 class _WorkerSignals(QObject):  # pylint: disable=too-few-public-methods
@@ -177,10 +149,11 @@ class _Worker(QRunnable):  # pylint: disable=too-few-public-methods
 
     def run(self):
         try:
+            if self._cancelled:
+                return
+            result = self.fn()
             if not self._cancelled:
-                result = self.fn()
-                if not self._cancelled:
-                    self.signals.finished.emit(result)
+                self.signals.finished.emit(result)
         except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
             if not self._cancelled:
                 self.signals.failed.emit(str(exc))
@@ -190,114 +163,86 @@ class SSHApp(QMainWindow):
     # pylint: disable=too-many-instance-attributes
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SSH Key Setup")
-        self.resize(980, 640)
+        self.setWindowTitle("SSH Key Manager")
+        self.resize(1080, 720)
+
         self._pool = QThreadPool.globalInstance()
         self._busy = False
-        self._current_worker = None
+        self._current_worker: _Worker | None = None
 
-        # Optional UI elements kept for backward compatibility with earlier layouts.
-        # (Used by _handle_test_results; may remain None in the current UI.)
-        self.lbl_test: QLabel | None = None
-
-        # Key management state
-        self._selected_key = None
-        self._used_keys = set()  # Track keys added to Git hosts
-        self._test_ok = False
+        self._selected_key: str | None = None
+        self._used_keys: set[str] = set()
+        self._copied_keys: set[str] = set()
+        self._tested_keys_ok: dict[str, bool] = {}
+        self._agent_loaded_keys: set[str] = set()
+        self._state_loaded = False
 
         self._build_ui()
-        self.refresh_state()
+        self._wire_signals()
+        self._load_state()
+        self._refresh_keys(select_name=None)
 
-    def _build_ui(self):  # pylint: disable=too-many-statements,too-many-locals
-        # QApplication.instance() is typed as Optional[QCoreApplication]; narrow for type checkers.
+    def _build_ui(self):  # pylint: disable=too-many-statements
         qt_app = cast(QApplication, QApplication.instance())
-        qt_app.setStyleSheet(APP_STYLESHEET)
+        qt_app.setStyleSheet(LIGHT_STYLESHEET)
 
         root = QWidget(self)
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(18, 18, 18, 14)
-        outer.setSpacing(12)
-
+        outer.setContentsMargins(18, 16, 18, 12)
+        outer.setSpacing(10)
         self._root = root
 
-        # Clean header with title only
-        header = QVBoxLayout()
-        self.title = QLabel("SSH Key Setup")
-        self.title.setObjectName("Title")
-        header.addWidget(self.title)
-        outer.addLayout(header)
+        title = QLabel("SSH Key Manager")
+        title.setObjectName("Title")
+        subtitle = QLabel("Minimal flow: generate key, add public key to host, verify connection.")
+        subtitle.setObjectName("Subtitle")
+        outer.addWidget(title)
+        outer.addWidget(subtitle)
 
-        # Main content (tabs only, no sidebar)
-        right = QTabWidget()
-        outer.addWidget(right, 1)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        outer.addWidget(splitter, 1)
 
-        self.tabs = right
+        sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(10)
 
-        guided_tab = self._build_guided_tab()
-        right.addTab(guided_tab, "Guided setup")
+        list_box = QGroupBox("Saved Keys")
+        list_box_layout = QVBoxLayout(list_box)
+        self.key_list = QListWidget()
+        self.key_list.setAlternatingRowColors(True)
+        list_box_layout.addWidget(self.key_list)
+        sidebar_layout.addWidget(list_box, 1)
 
-        # Public key tab
-        key_tab = QWidget()
-        key_tab_layout = QVBoxLayout(key_tab)
-        key_tab_layout.setContentsMargins(14, 14, 14, 14)
-        key_tab_layout.setSpacing(10)
+        side_actions = QHBoxLayout()
+        self.btn_new_key = QPushButton("Generate")
+        self.btn_new_key.setObjectName("Primary")
+        self.btn_refresh_keys = QPushButton("Refresh")
+        side_actions.addWidget(self.btn_new_key)
+        side_actions.addWidget(self.btn_refresh_keys)
+        sidebar_layout.addLayout(side_actions)
 
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.btn_copy = QPushButton("Copy public key")
-        self.btn_copy.setObjectName("Primary")
-        self.btn_open_ssh = QPushButton("Open .ssh folder")
-        row.addWidget(self.btn_copy)
-        row.addWidget(self.btn_open_ssh)
-        row.addStretch(1)
-        key_tab_layout.addLayout(row)
+        self.content_stack = QStackedWidget()
+        self.page_welcome = self._build_welcome_page()
+        self.page_details = self._build_key_details_page()
+        self.content_stack.addWidget(self.page_welcome)
+        self.content_stack.addWidget(self.page_details)
 
-        self.public_key = QPlainTextEdit()
-        self.public_key.setReadOnly(True)
-        self.public_key.setPlaceholderText("Your public key will appear here after generation.")
-        key_tab_layout.addWidget(self.public_key, 1)
-        right.addTab(key_tab, "Public key")
+        splitter.addWidget(sidebar)
+        splitter.addWidget(self.content_stack)
+        splitter.setSizes([320, 760])
+        splitter.setStretchFactor(1, 1)
 
-        # Logs tab
-        log_tab = QWidget()
-        log_layout = QVBoxLayout(log_tab)
-        log_layout.setContentsMargins(14, 14, 14, 14)
-        log_layout.setSpacing(10)
+        activity_box = QGroupBox("Activity")
+        activity_layout = QVBoxLayout(activity_box)
+        self.activity_log = QPlainTextEdit()
+        self.activity_log.setReadOnly(True)
+        self.activity_log.setMaximumBlockCount(300)
+        self.activity_log.setFixedHeight(120)
+        activity_layout.addWidget(self.activity_log)
+        outer.addWidget(activity_box)
 
-        log_actions = QHBoxLayout()
-        self.btn_clear_log = QPushButton("Clear log")
-        log_actions.addWidget(self.btn_clear_log)
-        log_actions.addStretch(1)
-        log_layout.addLayout(log_actions)
-
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        log_layout.addWidget(self.log, 1)
-        right.addTab(log_tab, "Logs")
-
-        # Help tab
-        help_tab = QWidget()
-        help_layout = QVBoxLayout(help_tab)
-        help_layout.setContentsMargins(14, 14, 14, 14)
-        help_layout.setSpacing(10)
-        help_text = QLabel(
-            "<b>Recommended flow</b><br>"
-            "1) Generate a key (optionally set a comment).<br>"
-            "2) Start the SSH agent and add the key.<br>"
-            "3) Copy the public key and add it to GitHub/Bitbucket.<br>"
-            "4) Test the connection.<br><br>"
-            "<b>Tip</b>: If you already created a key elsewhere, ensure it matches "
-            "the path shown in Status."
-        )
-        help_text.setWordWrap(True)
-        help_layout.addWidget(help_text)
-        right.addTab(help_tab, "Help")
-
-        # Default to the guided view
-        right.setCurrentIndex(0)
-
-        # Busy overlay (loader with cancel button)
         self._busy_overlay = QFrame(root)
         self._busy_overlay.setObjectName("BusyOverlay")
         self._busy_overlay.setVisible(False)
@@ -306,746 +251,628 @@ class SSHApp(QMainWindow):
         ov.setContentsMargins(18, 18, 18, 18)
         ov.setSpacing(10)
         ov.addStretch(1)
-        self._busy_label = QLabel("Working…")
+
+        self._busy_label = QLabel("Working...")
         self._busy_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._busy_label.setStyleSheet("color: #e8ecf3; font-weight: 600;")
         ov.addWidget(self._busy_label)
+
         self._busy_bar = QProgressBar()
         self._busy_bar.setRange(0, 0)
         self._busy_bar.setTextVisible(False)
         ov.addWidget(self._busy_bar)
-        
+
         self._busy_cancel = QPushButton("Cancel")
         self._busy_cancel.setObjectName("Cancel")
-        self._busy_cancel.clicked.connect(self._cancel_operation)
         ov.addWidget(self._busy_cancel)
         ov.addStretch(2)
 
         self.setStatusBar(self.statusBar())
         self.statusBar().showMessage("Ready")
-
-        # Signals for tab content
-        self.btn_copy.clicked.connect(self.on_copy)
-        self.btn_open_ssh.clicked.connect(self.on_open_ssh_folder)
-        self.btn_clear_log.clicked.connect(self.log.clear)
-
         self._update_overlay_geometry()
+
+    def _build_welcome_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(12)
+
+        intro_box = QGroupBox("Quick Setup")
+        intro_layout = QVBoxLayout(intro_box)
+        intro = QLabel(
+            "1) Start SSH agent. 2) Generate key. 3) Add key to agent and copy public key. "
+            "4) Add to Git host. 5) Run connection test."
+        )
+        intro.setWordWrap(True)
+        intro_layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.input_key_name = QLineEdit("id_ed25519")
+        self.input_key_name.setPlaceholderText("Example: id_work_github")
+
+        self.combo_algorithm = QComboBox()
+        self.combo_algorithm.addItems(["ed25519", "rsa", "ecdsa"])
+
+        self.input_comment = QLineEdit()
+        self.input_comment.setPlaceholderText("Optional comment (e.g. you@laptop)")
+
+        self.input_passphrase = QLineEdit()
+        self.input_passphrase.setPlaceholderText("Optional passphrase")
+        self.input_passphrase.setEchoMode(QLineEdit.EchoMode.Password)
+
+        self.input_passphrase_confirm = QLineEdit()
+        self.input_passphrase_confirm.setPlaceholderText("Confirm passphrase")
+        self.input_passphrase_confirm.setEchoMode(QLineEdit.EchoMode.Password)
+
+        self.chk_show_passphrase = QCheckBox("Show passphrase")
+
+        self.chk_force = QCheckBox("Overwrite if key already exists")
+        self.chk_force.setChecked(False)
+
+        form.addRow("Key name", self.input_key_name)
+        form.addRow("Algorithm", self.combo_algorithm)
+        form.addRow("Comment", self.input_comment)
+        form.addRow("Passphrase", self.input_passphrase)
+        form.addRow("Confirm", self.input_passphrase_confirm)
+        form.addRow("", self.chk_show_passphrase)
+        form.addRow("", self.chk_force)
+        intro_layout.addLayout(form)
+
+        self.btn_generate_welcome = QPushButton("Generate Key")
+        self.btn_generate_welcome.setObjectName("Primary")
+        self.btn_start_agent_welcome = QPushButton("Start / Check SSH Agent")
+        self.btn_add_agent_welcome = QPushButton("Add Selected Key to Agent")
+        intro_layout.addWidget(self.btn_start_agent_welcome)
+        intro_layout.addWidget(self.btn_add_agent_welcome)
+        intro_layout.addWidget(self.btn_generate_welcome)
+        layout.addWidget(intro_box)
+
+        guide_box = QGroupBox("Need Help?")
+        guide_layout = QVBoxLayout(guide_box)
+        guide = QLabel(
+            "After generation, select the key from the left list, copy the public key, "
+            "add it to your Git host, then run the connection test."
+        )
+        guide.setWordWrap(True)
+        guide_layout.addWidget(guide)
+
+        links = QHBoxLayout()
+        self.btn_open_github_welcome = QPushButton("Open GitHub SSH Page")
+        self.btn_open_bitbucket_welcome = QPushButton("Open Bitbucket SSH Page")
+        links.addWidget(self.btn_open_github_welcome)
+        links.addWidget(self.btn_open_bitbucket_welcome)
+        guide_layout.addLayout(links)
+        layout.addWidget(guide_box)
+
+        layout.addStretch(1)
+        return page
+
+    def _build_key_details_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(10)
+
+        header_box = QGroupBox("Selected Key")
+        header_layout = QVBoxLayout(header_box)
+        self.key_details_name = QLabel("No key selected")
+        self.key_details_name.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        self.key_details_path = QLabel("Path: -")
+        self.key_details_path.setObjectName("Subtitle")
+        self.key_details_fingerprint = QLabel("Fingerprint: -")
+        self.key_details_fingerprint.setObjectName("Subtitle")
+        header_layout.addWidget(self.key_details_name)
+        header_layout.addWidget(self.key_details_path)
+        header_layout.addWidget(self.key_details_fingerprint)
+        layout.addWidget(header_box)
+
+        checklist_box = QGroupBox("Guided Steps")
+        checklist_layout = QVBoxLayout(checklist_box)
+        self.step_generate = QLabel()
+        self.step_agent = QLabel()
+        self.step_copy = QLabel()
+        self.step_test = QLabel()
+        checklist_layout.addWidget(self.step_generate)
+        checklist_layout.addWidget(self.step_agent)
+        checklist_layout.addWidget(self.step_copy)
+        checklist_layout.addWidget(self.step_test)
+        layout.addWidget(checklist_box)
+
+        key_box = QGroupBox("Public Key")
+        key_layout = QVBoxLayout(key_box)
+        self.public_key_text = QPlainTextEdit()
+        self.public_key_text.setReadOnly(True)
+        key_layout.addWidget(self.public_key_text)
+        layout.addWidget(key_box, 1)
+
+        action_row = QHBoxLayout()
+        self.btn_copy_key = QPushButton("Copy Public Key")
+        self.btn_copy_key.setObjectName("Primary")
+        self.btn_add_key_agent = QPushButton("Add Key to SSH Agent")
+        self.btn_mark_used = QPushButton("Mark as Added to Host")
+        self.btn_delete_key = QPushButton("Delete Key")
+        self.btn_delete_key.setObjectName("Danger")
+        action_row.addWidget(self.btn_add_key_agent)
+        action_row.addWidget(self.btn_copy_key)
+        action_row.addWidget(self.btn_mark_used)
+        action_row.addStretch(1)
+        action_row.addWidget(self.btn_delete_key)
+        layout.addLayout(action_row)
+
+        self.btn_start_agent = QPushButton("Start / Check SSH Agent")
+        layout.addWidget(self.btn_start_agent)
+
+        host_row = QHBoxLayout()
+        self.btn_open_github = QPushButton("Open GitHub SSH Settings")
+        self.btn_open_bitbucket = QPushButton("Open Bitbucket SSH Settings")
+        host_row.addWidget(self.btn_open_github)
+        host_row.addWidget(self.btn_open_bitbucket)
+        layout.addLayout(host_row)
+
+        test_box = QGroupBox("Connection Test")
+        test_layout = QVBoxLayout(test_box)
+        self.test_status_label = QLabel("Not tested yet.")
+        self.test_status_label.setObjectName("Subtitle")
+        self.btn_run_test = QPushButton("Run SSH Test")
+        self.test_result_text = QPlainTextEdit()
+        self.test_result_text.setReadOnly(True)
+        self.test_result_text.setFixedHeight(110)
+        test_layout.addWidget(self.test_status_label)
+        test_layout.addWidget(self.btn_run_test)
+        test_layout.addWidget(self.test_result_text)
+        layout.addWidget(test_box)
+
+        return page
+
+    def _wire_signals(self):
+        self.btn_new_key.clicked.connect(self._on_generate_requested)
+        self.btn_generate_welcome.clicked.connect(self._on_generate_requested)
+        self.btn_start_agent_welcome.clicked.connect(self._start_agent)
+        self.btn_add_agent_welcome.clicked.connect(self._add_selected_key_to_agent)
+        self.btn_refresh_keys.clicked.connect(lambda: self._refresh_keys(self._selected_key))
+        self.chk_show_passphrase.stateChanged.connect(self._toggle_passphrase_visibility)
+
+        self.key_list.currentItemChanged.connect(self._on_selected_item_changed)
+
+        self.btn_copy_key.clicked.connect(self._copy_selected_public_key)
+        self.btn_add_key_agent.clicked.connect(self._add_selected_key_to_agent)
+        self.btn_mark_used.clicked.connect(self._toggle_mark_used)
+        self.btn_delete_key.clicked.connect(self._delete_selected_key)
+        self.btn_run_test.clicked.connect(self._run_connection_test)
+        self.btn_start_agent.clicked.connect(self._start_agent)
+
+        self.btn_open_github.clicked.connect(lambda: self._open_host_page("github"))
+        self.btn_open_bitbucket.clicked.connect(lambda: self._open_host_page("bitbucket"))
+        self.btn_open_github_welcome.clicked.connect(lambda: self._open_host_page("github"))
+        self.btn_open_bitbucket_welcome.clicked.connect(lambda: self._open_host_page("bitbucket"))
+
+        self._busy_cancel.clicked.connect(self._cancel_operation)
 
     def resizeEvent(self, event):  # noqa: N802  # pylint: disable=invalid-name
         super().resizeEvent(event)
         self._update_overlay_geometry()
 
     def _update_overlay_geometry(self):
-        if hasattr(self, "_busy_overlay"):
-            self._busy_overlay.setGeometry(self._root.rect())
+        self._busy_overlay.setGeometry(self._root.rect())
+
+    def _load_state(self):
+        if not STATE_FILE.exists():
+            self._state_loaded = True
+            return
+        try:
+            data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            self._used_keys = set(data.get("used_keys", []))
+            self._copied_keys = set(data.get("copied_keys", []))
+            tested_map = data.get("tested_keys_ok", {})
+            if isinstance(tested_map, dict):
+                self._tested_keys_ok = {str(k): bool(v) for k, v in tested_map.items()}
+            self._agent_loaded_keys = set(data.get("agent_loaded_keys", []))
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+            self._log(f"State load warning: {exc}")
+        self._state_loaded = True
+
+    def _save_state(self):
+        if not self._state_loaded:
+            return
+        data = {
+            "used_keys": sorted(self._used_keys),
+            "copied_keys": sorted(self._copied_keys),
+            "tested_keys_ok": self._tested_keys_ok,
+            "agent_loaded_keys": sorted(self._agent_loaded_keys),
+        }
+        try:
+            STATE_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+            self._log(f"State save warning: {exc}")
+
+    def _toggle_passphrase_visibility(self):
+        echo = QLineEdit.EchoMode.Normal if self.chk_show_passphrase.isChecked() else QLineEdit.EchoMode.Password
+        self.input_passphrase.setEchoMode(echo)
+        self.input_passphrase_confirm.setEchoMode(echo)
+
+    def _log(self, message: str):
+        self.activity_log.appendPlainText(f"[{_ts()}] {message}")
+
+    def _set_busy(self, busy: bool, message: str | None = None):
+        self._busy = busy
+        for btn in (
+            self.btn_new_key,
+            self.btn_generate_welcome,
+            self.btn_start_agent_welcome,
+            self.btn_add_agent_welcome,
+            self.btn_refresh_keys,
+            self.btn_add_key_agent,
+            self.btn_copy_key,
+            self.btn_mark_used,
+            self.btn_delete_key,
+            self.btn_run_test,
+            self.btn_start_agent,
+            self.btn_open_github,
+            self.btn_open_bitbucket,
+            self.btn_open_github_welcome,
+            self.btn_open_bitbucket_welcome,
+        ):
+            btn.setEnabled(not busy)
+
+        if message:
+            self.statusBar().showMessage(message)
+
+        if busy:
+            self._busy_label.setText(message or "Working...")
+            self._busy_overlay.setVisible(True)
+            self._busy_overlay.raise_()
+        else:
+            self._busy_overlay.setVisible(False)
+            self._current_worker = None
 
     def _cancel_operation(self):
         if self._current_worker:
             self._current_worker.cancel()
             self._current_worker = None
-            self._set_busy(False, "Cancelled")
-            self.write("Operation cancelled by user")
+            self._set_busy(False, "Operation cancelled")
+            self._log("Cancelled current operation")
 
-    def _build_guided_tab(self) -> QWidget:  # pylint: disable=too-many-statements
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        header = QGroupBox("Step-by-step setup")
-        header_layout = QVBoxLayout(header)
-        title = QLabel("Complete SSH setup for Git in five steps")
-        title.setStyleSheet("font-weight: 600;")
-        hint = QLabel(
-            "Run each step in order. You can switch to the Public key tab at any time "
-            "to view or copy the key."
-        )
-        hint.setWordWrap(True)
-        header_layout.addWidget(title)
-        header_layout.addWidget(hint)
-        layout.addWidget(header)
-
-        # Breadcrumb navigation
-        self.guided_crumbs_row = QHBoxLayout()
-        self.guided_crumbs_row.setSpacing(6)
-        layout.addLayout(self.guided_crumbs_row)
-
-        self._crumb_titles = [
-            "Get started",
-            "Generate key",
-            "Manage keys",
-            "Add to Git host",
-            "Test",
-        ]
-        self._crumb_buttons = []
-        for i, t in enumerate(self._crumb_titles):
-            btn = QToolButton()
-            btn.setObjectName("Link")
-            btn.setText(t)
-            btn.clicked.connect(lambda _=False, idx=i: self._guided_go_to(idx))
-            self._crumb_buttons.append(btn)
-            self.guided_crumbs_row.addWidget(btn)
-            if i != len(self._crumb_titles) - 1:
-                sep = QLabel("/")
-                sep.setStyleSheet("color: #6b7280;")
-                self.guided_crumbs_row.addWidget(sep)
-        self.guided_crumbs_row.addStretch(1)
-
-        self.guided_stack = QStackedWidget()
-        layout.addWidget(self.guided_stack, 1)
-
-        self.guided_stack.addWidget(self._guided_step_get_started())
-        self.guided_stack.addWidget(self._guided_step_key())
-        self.guided_stack.addWidget(self._guided_step_manage())
-        self.guided_stack.addWidget(self._guided_step_publish())
-        self.guided_stack.addWidget(self._guided_step_test())
-
-        nav = QHBoxLayout()
-        nav.setSpacing(10)
-        self.guided_back = QPushButton("Back")
-        self.guided_next = QPushButton("Next")
-        self.guided_next.setObjectName("Primary")
-        nav.addWidget(self.guided_back)
-        nav.addWidget(self.guided_next)
-        nav.addStretch(1)
-        layout.addLayout(nav)
-
-        self.guided_back.clicked.connect(self._guided_prev)
-        self.guided_next.clicked.connect(self._guided_next)
-
-        self._guided_update_nav()
-        return tab
-
-    def _guided_step_get_started(self) -> QWidget:
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setSpacing(10)
-
-        title = QLabel("Get started")
-        title.setStyleSheet("font-weight: 700; font-size: 13pt;")
-        l.addWidget(title)
-
-        body = QLabel(
-            "This application helps you create and manage SSH keys for Git. "
-            "You can generate keys with different algorithms, manage multiple keys, "
-            "and track which ones you've added to Git hosts."
-        )
-        body.setWordWrap(True)
-        l.addWidget(body)
-
-        features = QLabel(
-            "• Generate keys with Ed25519, RSA, or ECDSA algorithms\n"
-            "• Create multiple keys with custom names\n"
-            "• View and copy all your keys\n"
-            "• Track which keys are in use"
-        )
-        features.setStyleSheet("color: #b8c0cc;")
-        l.addWidget(features)
-
-        self.guided_start_btn = QPushButton("Start setup")
-        self.guided_start_btn.setObjectName("Primary")
-        self.guided_start_btn.clicked.connect(lambda: self._guided_go_to(1))
-        l.addWidget(self.guided_start_btn)
-
-        l.addStretch(1)
-        return w
-
-    def _guided_step_key(self) -> QWidget:
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setSpacing(10)
-
-        title = QLabel("Step 1: Create an SSH key")
-        title.setStyleSheet("font-weight: 600;")
-        l.addWidget(title)
-
-        body = QLabel(
-            "Generate a new SSH key with your preferred algorithm. "
-            "You can create multiple keys with different names."
-        )
-        body.setWordWrap(True)
-        l.addWidget(body)
-
-        # Algorithm selection
-        algo_label = QLabel("Algorithm:")
-        algo_label.setStyleSheet("font-weight: 500;")
-        l.addWidget(algo_label)
-        
-        algo_row = QHBoxLayout()
-        algo_row.setSpacing(8)
-        self.algo_ed25519 = QToolButton()
-        self.algo_ed25519.setObjectName("Toggle")
-        self.algo_ed25519.setText("Ed25519 (recommended)")
-        self.algo_ed25519.setCheckable(True)
-        self.algo_ed25519.setChecked(True)
-        
-        self.algo_rsa = QToolButton()
-        self.algo_rsa.setObjectName("Toggle")
-        self.algo_rsa.setText("RSA 4096")
-        self.algo_rsa.setCheckable(True)
-        
-        self.algo_ecdsa = QToolButton()
-        self.algo_ecdsa.setObjectName("Toggle")
-        self.algo_ecdsa.setText("ECDSA")
-        self.algo_ecdsa.setCheckable(True)
-        
-        # Make them mutually exclusive
-        self.algo_ed25519.clicked.connect(lambda: self._select_algo("ed25519"))
-        self.algo_rsa.clicked.connect(lambda: self._select_algo("rsa"))
-        self.algo_ecdsa.clicked.connect(lambda: self._select_algo("ecdsa"))
-        
-        algo_row.addWidget(self.algo_ed25519)
-        algo_row.addWidget(self.algo_rsa)
-        algo_row.addWidget(self.algo_ecdsa)
-        algo_row.addStretch(1)
-        l.addLayout(algo_row)
-
-        # Key name input
-        name_label = QLabel("Key name:")
-        name_label.setStyleSheet("font-weight: 500;")
-        l.addWidget(name_label)
-        
-        self.guided_key_name = QLineEdit()
-        self.guided_key_name.setPlaceholderText("e.g., id_ed25519, github_key, work_key")
-        self.guided_key_name.setText("id_ed25519")
-        l.addWidget(self.guided_key_name)
-
-        # Comment input
-        comment_label = QLabel("Comment (optional):")
-        comment_label.setStyleSheet("font-weight: 500;")
-        l.addWidget(comment_label)
-        
-        self.guided_comment = QLineEdit()
-        self.guided_comment.setPlaceholderText("e.g., email@domain.com")
-        l.addWidget(self.guided_comment)
-
-        self.guided_force = QCheckBox("Overwrite if exists")
-        self.guided_force.setToolTip("Replace existing key with the same name")
-        l.addWidget(self.guided_force)
-
-        self.guided_btn_key = QPushButton("Generate key")
-        self.guided_btn_key.setObjectName("Primary")
-        self.guided_btn_key.clicked.connect(self._guided_generate_key)
-        l.addWidget(self.guided_btn_key)
-
-        self.guided_key_status = QLabel("")
-        self.guided_key_status.setWordWrap(True)
-        self.guided_key_status.setStyleSheet("color: #10b981;")
-        l.addWidget(self.guided_key_status)
-
-        l.addStretch(1)
-        return w
-    
-    def _select_algo(self, algo: str):
-        """Handle algorithm toggle button selection."""
-        self.algo_ed25519.setChecked(algo == "ed25519")
-        self.algo_rsa.setChecked(algo == "rsa")
-        self.algo_ecdsa.setChecked(algo == "ecdsa")
-        
-        # Update default key name based on algorithm
-        if not self.guided_key_name.text() or self.guided_key_name.text().startswith("id_"):
-            self.guided_key_name.setText(f"id_{algo}")
-
-    def _guided_step_manage(self) -> QWidget:
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setSpacing(10)
-
-        title = QLabel("Step 2: Manage your keys")
-        title.setStyleSheet("font-weight: 600;")
-        l.addWidget(title)
-
-        body = QLabel(
-            "View all your SSH keys, copy them, and track which ones you've added to Git hosts."
-        )
-        body.setWordWrap(True)
-        l.addWidget(body)
-
-        # Key list
-        from PySide6.QtWidgets import QListWidget, QListWidgetItem
-        self.key_list = QListWidget()
-        self.key_list.setStyleSheet("""
-            QListWidget {
-                background: #0c0f14;
-                border: 1px solid #252a33;
-                border-radius: 10px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-radius: 6px;
-                margin: 2px;
-            }
-            QListWidget::item:selected {
-                background: #2b5cff;
-                color: #ffffff;
-            }
-            QListWidget::item:hover {
-                background: #1a2230;
-            }
-        """)
-        self.key_list.itemSelectionChanged.connect(self._on_key_selected)
-        l.addWidget(self.key_list)
-
-        # Selected key info
-        self.selected_key_label = QLabel("Select a key to view details")
-        self.selected_key_label.setStyleSheet("color: #b8c0cc; font-style: italic;")
-        self.selected_key_label.setWordWrap(True)
-        l.addWidget(self.selected_key_label)
-
-        # Action buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-        
-        self.btn_copy_selected = QPushButton("Copy selected key")
-        self.btn_copy_selected.setObjectName("Primary")
-        self.btn_copy_selected.setEnabled(False)
-        self.btn_copy_selected.clicked.connect(self._copy_selected_key)
-        
-        self.btn_mark_used = QPushButton("Mark as used")
-        self.btn_mark_used.setEnabled(False)
-        self.btn_mark_used.clicked.connect(self._mark_key_used)
-        
-        self.btn_refresh_keys = QPushButton("Refresh list")
-        self.btn_refresh_keys.clicked.connect(self._refresh_key_list)
-        
-        btn_row.addWidget(self.btn_copy_selected)
-        btn_row.addWidget(self.btn_mark_used)
-        btn_row.addWidget(self.btn_refresh_keys)
-        btn_row.addStretch(1)
-        l.addLayout(btn_row)
-
-        l.addStretch(1)
-        return w
-
-    def _guided_step_publish(self) -> QWidget:
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setSpacing(10)
-
-        title = QLabel("Step 3: Add the public key to your Git host")
-        title.setStyleSheet("font-weight: 600;")
-        l.addWidget(title)
-
-        body = QLabel(
-            "Copy the public key from the Manage Keys step and add it to your Git host account. "
-            "After saving it, mark the key as used and continue to test the connection."
-        )
-        body.setWordWrap(True)
-        l.addWidget(body)
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.guided_btn_open_github = QPushButton("Open GitHub settings")
-        self.guided_btn_open_bitbucket = QPushButton("Open Bitbucket settings")
-        self.guided_btn_open_github.clicked.connect(lambda: webbrowser.open(GITHUB_SSH_URL))
-        self.guided_btn_open_bitbucket.clicked.connect(lambda: webbrowser.open(BITBUCKET_SSH_URL))
-        row.addWidget(self.guided_btn_open_github)
-        row.addWidget(self.guided_btn_open_bitbucket)
-        row.addStretch(1)
-        l.addLayout(row)
-
-        self.guided_publish_confirm = QCheckBox("I added the public key to my Git host")
-        self.guided_publish_confirm.stateChanged.connect(lambda _: self._guided_update_nav())
-        l.addWidget(self.guided_publish_confirm)
-
-        l.addStretch(1)
-        return w
-
-    def _guided_step_test(self) -> QWidget:
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setSpacing(10)
-
-        title = QLabel("Step 4: Test the SSH connection")
-        title.setStyleSheet("font-weight: 600;")
-        l.addWidget(title)
-
-        body = QLabel(
-            "This checks SSH authentication against GitHub and Bitbucket. "
-            "See the Logs tab for the full output."
-        )
-        body.setWordWrap(True)
-        l.addWidget(body)
-
-        self.guided_test_status = QLabel("Status: not tested")
-        self.guided_test_status.setWordWrap(True)
-        l.addWidget(self.guided_test_status)
-
-        self.guided_btn_test = QPushButton("Run connection test")
-        self.guided_btn_test.setObjectName("Primary")
-        self.guided_btn_test.clicked.connect(self._guided_test)
-        l.addWidget(self.guided_btn_test)
-
-        l.addStretch(1)
-        return w
-
-    def _guided_prev(self):
-        idx = self.guided_stack.currentIndex()
-        self.guided_stack.setCurrentIndex(max(0, idx - 1))
-        self._guided_update_nav()
-
-    def _guided_next(self):
-        idx = self.guided_stack.currentIndex()
-        self.guided_stack.setCurrentIndex(min(self.guided_stack.count() - 1, idx + 1))
-        self._guided_update_nav()
-
-    def _guided_go_to(self, idx: int):
-        allowed = self._guided_max_index()
-        self.guided_stack.setCurrentIndex(min(idx, allowed))
-        self._guided_update_nav()
-
-    def _guided_max_index(self) -> int:
-        # Allow navigation through all steps
-        if hasattr(self, "guided_publish_confirm") and self.guided_publish_confirm.isChecked():
-            return 4
-        return 3
-
-    def _guided_update_nav(self):
-        idx = self.guided_stack.currentIndex() if hasattr(self, "guided_stack") else 0
-        total = self.guided_stack.count() if hasattr(self, "guided_stack") else 0
-        if hasattr(self, "guided_back"):
-            self.guided_back.setEnabled(idx > 0 and not self._busy)
-            allow_next = idx < (total - 1) and not self._busy
-            if idx == 4 and hasattr(self, "guided_publish_confirm"):
-                allow_next = allow_next and self.guided_publish_confirm.isChecked()
-            self.guided_next.setEnabled(allow_next)
-
-        if hasattr(self, "_crumb_buttons"):
-            allowed = self._guided_max_index()
-            for i, btn in enumerate(self._crumb_buttons):
-                btn.setEnabled(i <= allowed and not self._busy)
-                if i == idx:
-                    btn.setStyleSheet("color: #c7d6ff; font-weight: 650;")
-                else:
-                    btn.setStyleSheet("")
-
-    def _guided_generate_key(self):
-        key_name = self.guided_key_name.text().strip()
-        if not key_name:
-            QMessageBox.warning(self, "Invalid input", "Please enter a key name.")
+    def _run_worker(
+        self,
+        fn,
+        on_done,
+        busy_message: str,
+        error_title: str,
+    ):
+        if self._busy:
             return
-        
-        # Get selected algorithm
-        if self.algo_rsa.isChecked():
-            algo = "rsa"
-        elif self.algo_ecdsa.isChecked():
-            algo = "ecdsa"
-        else:
-            algo = "ed25519"
-        
-        comment = self.guided_comment.text().strip() or None
-        force = bool(self.guided_force.isChecked())
+        self._set_busy(True, busy_message)
+        worker = _Worker(fn)
+        self._current_worker = worker
 
-        if force:
-            confirm = QMessageBox.warning(
-                self,
-                "Overwrite existing key?",
-                f"This will overwrite the key '{key_name}' if it exists.\n\n"
-                "Only do this if you understand the impact.",
-                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok,
-            )
-            if confirm != QMessageBox.StandardButton.Ok:
+        def done(result: Any):
+            self._set_busy(False)
+            on_done(result)
+
+        def failed(err: str):
+            self._set_busy(False)
+            self._log(f"Error: {err}")
+            QMessageBox.critical(self, error_title, err)
+
+        worker.signals.finished.connect(done)
+        worker.signals.failed.connect(failed)
+        self._pool.start(worker)
+
+    def _refresh_keys(self, select_name: str | None):
+        keys = sorted(list_ssh_keys(), key=lambda it: it["name"].lower())
+        self.key_list.clear()
+
+        for key in keys:
+            name = key["name"]
+            tags = []
+            if name in self._used_keys:
+                tags.append("added")
+            if self._tested_keys_ok.get(name):
+                tags.append("tested")
+            if name in self._agent_loaded_keys:
+                tags.append("agent")
+            suffix = f"  [{' | '.join(tags)}]" if tags else ""
+            item = QListWidgetItem(f"{name}{suffix}")
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self.key_list.addItem(item)
+
+        if not keys:
+            self._selected_key = None
+            self.content_stack.setCurrentWidget(self.page_welcome)
+            self.statusBar().showMessage("No SSH keys found. Generate one to get started.")
+            self._update_guided_steps()
+            return
+
+        target = select_name or self._selected_key or keys[0]["name"]
+        for index in range(self.key_list.count()):
+            item = self.key_list.item(index)
+            data = cast(dict[str, str], item.data(Qt.ItemDataRole.UserRole))
+            if data["name"] == target:
+                self.key_list.setCurrentItem(item)
                 return
 
-        def work():
+        self.key_list.setCurrentRow(0)
+
+    def _on_selected_item_changed(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None):
+        if current is None:
+            self._selected_key = None
+            self.content_stack.setCurrentWidget(self.page_welcome)
+            self._update_guided_steps()
+            return
+
+        key_info = cast(dict[str, str], current.data(Qt.ItemDataRole.UserRole))
+        key_name = key_info["name"]
+        key_path = key_info["path"]
+
+        self._selected_key = key_name
+        self.content_stack.setCurrentWidget(self.page_details)
+
+        public_key = load_public_key(key_name) or ""
+        fingerprint = get_key_fingerprint(key_name) or "Unknown"
+        self.key_details_name.setText(key_name)
+        self.key_details_path.setText(f"Path: {key_path}")
+        self.key_details_fingerprint.setText(f"Fingerprint: {fingerprint}")
+        self.public_key_text.setPlainText(public_key)
+        self.test_result_text.clear()
+
+        if self._tested_keys_ok.get(key_name):
+            self.test_status_label.setText("Last test: OK")
+        else:
+            self.test_status_label.setText("Last test: not successful yet")
+
+        self._update_mark_used_button()
+        self._update_guided_steps()
+
+    def _on_generate_requested(self):
+        if self._busy:
+            return
+
+        key_name = self.input_key_name.text().strip()
+        if not key_name:
+            QMessageBox.warning(self, "Invalid key name", "Key name cannot be empty.")
+            return
+        if not _valid_key_name(key_name):
+            QMessageBox.warning(
+                self,
+                "Invalid key name",
+                "Use only letters, numbers, dot (.), underscore (_) or dash (-).",
+            )
+            return
+
+        algorithm = cast(KeyAlgorithm, self.combo_algorithm.currentText())
+        comment = self.input_comment.text().strip() or None
+        passphrase_text = self.input_passphrase.text()
+        passphrase_confirm = self.input_passphrase_confirm.text()
+        if passphrase_text != passphrase_confirm:
+            QMessageBox.warning(self, "Passphrase mismatch", "Passphrase and confirmation do not match.")
+            return
+        passphrase = passphrase_text if passphrase_text else None
+        force = self.chk_force.isChecked()
+
+        def generate_task():
             return generate_key(
-                algorithm=algo,
+                algorithm=algorithm,
                 key_name=key_name,
                 comment=comment,
-                force=force
+                passphrase=passphrase,
+                force=force,
             )
 
-        def done(msg):
-            self.write(msg)
-            self.guided_key_status.setText(f"✓ {msg}")
-            self.refresh_state()
-            self._refresh_key_list()
-            
-            # Animate the generate button
-            self._animate_button(self.guided_btn_key)
-            
-            # Auto-advance after short delay
-            QTimer.singleShot(800, lambda: self._guided_go_to(2))
-
-        self._run_async("Generating key", work, done)
-
-    def _guided_test(self):
-        def work():
-            key_name = None
-            if getattr(self, "_selected_key", None):
-                key_name = self._selected_key
+        def after_generate(message: str):
+            ok = "generated successfully" in message.lower()
+            self._log(message)
+            self.statusBar().showMessage(message)
+            if ok:
+                self.input_passphrase.clear()
+                self.input_passphrase_confirm.clear()
+                self._refresh_keys(select_name=key_name)
             else:
-                keys = list_ssh_keys()
-                if keys:
-                    key_name = keys[0].get("name")
+                QMessageBox.warning(self, "Key Generation", message)
 
-            return test_connections(key_name)
+        self._run_worker(
+            fn=generate_task,
+            on_done=after_generate,
+            busy_message="Generating SSH key...",
+            error_title="Key generation failed",
+        )
 
-        def done(results):
-            any_ok = any(ok for ok, _ in results.values()) if results else False
-            self._test_ok = bool(any_ok)
-            self.guided_test_status.setText(
-                f"Status: {'success' if any_ok else 'failed'}\nSee Logs for details."
-            )
-            self._handle_test_results(results)
-            self._guided_update_nav()
+    def _copy_selected_public_key(self):
+        if not self._selected_key:
+            QMessageBox.information(self, "No key selected", "Select a key from the left list first.")
+            return
+        pub = load_public_key(self._selected_key)
+        if not pub:
+            QMessageBox.warning(self, "Public key missing", "Could not load the selected public key.")
+            return
 
-        self._run_async("Testing SSH connections", work, done)
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(pub)
+        self._copied_keys.add(self._selected_key)
+        self._save_state()
+        self._log(f"Copied public key for '{self._selected_key}' to clipboard")
+        self.statusBar().showMessage("Public key copied to clipboard")
+        self._update_guided_steps()
 
-    def _handle_test_results(self, results):
-        lines = []
+    def _toggle_mark_used(self):
+        if not self._selected_key:
+            QMessageBox.information(self, "No key selected", "Select a key from the left list first.")
+            return
+
+        key = self._selected_key
+        if key in self._used_keys:
+            self._used_keys.remove(key)
+            self._log(f"Unmarked '{key}' as added to host")
+        else:
+            self._used_keys.add(key)
+            self._log(f"Marked '{key}' as added to host")
+
+        self._update_mark_used_button()
+        self._refresh_keys(select_name=key)
+        self._update_guided_steps()
+        self._save_state()
+
+    def _update_mark_used_button(self):
+        if self._selected_key and self._selected_key in self._used_keys:
+            self.btn_mark_used.setText("Unmark as Added")
+        else:
+            self.btn_mark_used.setText("Mark as Added to Host")
+
+    def _start_agent(self):
+        if self._busy:
+            return
+
+        def done(message: str):
+            self._log(message)
+            self.statusBar().showMessage(message)
+            if "could not" in message.lower() or "not reachable" in message.lower():
+                QMessageBox.warning(self, "SSH Agent", message)
+
+        self._run_worker(
+            fn=start_ssh_agent,
+            on_done=done,
+            busy_message="Starting/checking SSH agent...",
+            error_title="SSH agent check failed",
+        )
+
+    def _add_selected_key_to_agent(self):
+        if self._busy:
+            return
+        if not self._selected_key:
+            QMessageBox.information(self, "No key selected", "Select a key from the left list first.")
+            return
+
+        key_name = self._selected_key
+
+        def done(message: str):
+            self._log(message)
+            self.statusBar().showMessage(message)
+            if "added" in message.lower() and "failed" not in message.lower():
+                self._agent_loaded_keys.add(key_name)
+                self._save_state()
+                self._refresh_keys(select_name=key_name)
+                self._update_guided_steps()
+            else:
+                QMessageBox.warning(self, "Add key to agent", message)
+
+        self._run_worker(
+            fn=lambda: add_key_to_agent(key_name),
+            on_done=done,
+            busy_message="Adding selected key to SSH agent...",
+            error_title="Failed to add key to agent",
+        )
+
+    def _delete_selected_key(self):
+        if not self._selected_key:
+            QMessageBox.information(self, "No key selected", "Select a key from the left list first.")
+            return
+
+        key_name = self._selected_key
+        confirm = QMessageBox.question(
+            self,
+            "Delete key",
+            f"Delete '{key_name}' private and public key files from ~/.ssh?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        ssh_dir = Path.home() / ".ssh"
+        private_path = ssh_dir / key_name
+        public_path = ssh_dir / f"{key_name}.pub"
+
+        private_path.unlink(missing_ok=True)
+        public_path.unlink(missing_ok=True)
+
+        self._used_keys.discard(key_name)
+        self._copied_keys.discard(key_name)
+        self._tested_keys_ok.pop(key_name, None)
+        self._agent_loaded_keys.discard(key_name)
+        self._save_state()
+
+        self._log(f"Deleted key '{key_name}'")
+        self.statusBar().showMessage(f"Deleted '{key_name}'")
+        self._refresh_keys(select_name=None)
+
+    def _open_host_page(self, host: str):
+        url = GITHUB_SSH_URL if host == "github" else BITBUCKET_SSH_URL
+        webbrowser.open(url)
+        self._log(f"Opened {host} SSH settings page")
+
+    def _run_connection_test(self):
+        if not self._selected_key:
+            QMessageBox.information(self, "No key selected", "Select a key from the left list first.")
+            return
+
+        key_name = self._selected_key
+        self.test_result_text.clear()
+        self.test_status_label.setText("Testing SSH authentication...")
+
+        def after_test(results: dict[str, tuple[bool, str]]):
+            self._handle_test_results(key_name, results)
+
+        self._run_worker(
+            fn=lambda: test_connections(key_name=key_name),
+            on_done=after_test,
+            busy_message="Running SSH connection tests...",
+            error_title="Connection test failed",
+        )
+
+    def _handle_test_results(self, key_name: str, results: dict[str, tuple[bool, str]]):
+        lines: list[str] = []
         any_ok = False
+
         for host, (ok, msg) in results.items():
-            lines.append(f"{host}: {'OK' if ok else 'FAIL'} — {msg}")
+            status = "OK" if ok else "FAIL"
+            lines.append(f"{host}: {status}")
+            lines.append(msg)
+            lines.append("")
             any_ok = any_ok or ok
 
-        # lbl_test existed in an earlier UI; keep this best-effort update for compatibility.
-        result_text = f"Result: {'success' if any_ok else 'failed'}"
-        if self.lbl_test is not None:
-            self.lbl_test.setText(result_text)
-        else:
-            self.statusBar().showMessage(result_text)
-        self.write("Connection test results:")
-        for line in lines:
-            self.write(f"  {line}")
+        self.test_result_text.setPlainText("\n".join(lines).strip())
+        self._tested_keys_ok[key_name] = any_ok
+        self._save_state()
 
-        if not any_ok:
+        if any_ok:
+            self.test_status_label.setText("Last test: success")
+            self.statusBar().showMessage("SSH test passed for at least one host")
+            self._log(f"SSH test successful for '{key_name}'")
+        else:
+            self.test_status_label.setText("Last test: failed")
+            self.statusBar().showMessage("SSH test failed")
+            self._log(f"SSH test failed for '{key_name}'")
             QMessageBox.warning(
                 self,
                 "SSH test failed",
-                "SSH authentication did not succeed.\n\n"
-                "Make sure you've added the public key to your Git host. "
-                "If you have multiple keys, select the key you added in 'Manage keys' "
-                "so the test uses the right identity.",
+                "Authentication did not succeed. Ensure your public key is added to your Git host.",
             )
 
-    def write(self, msg: str):
-        self.log.appendPlainText(f"[{_ts()}] {msg}")
+        self._refresh_keys(select_name=key_name)
+        self._update_guided_steps()
 
-    def _set_busy(self, busy: bool, message: str | None = None):
-        self._busy = busy
-        
-        # Only disable public key tab button
-        if hasattr(self, "btn_copy"):
-            self.btn_copy.setEnabled(not busy)
-        if hasattr(self, "btn_open_ssh"):
-            self.btn_open_ssh.setEnabled(not busy)
-            
-        if message:
-            self.statusBar().showMessage(message)
+    def _step_line(self, done: bool, text: str) -> str:
+        prefix = "[Done]" if done else "[Todo]"
+        return f"{prefix} {text}"
 
-        if hasattr(self, "guided_stack"):
-            self._guided_update_nav()
+    def _update_guided_steps(self):
+        has_key = bool(self._selected_key)
+        in_agent = bool(self._selected_key and self._selected_key in self._agent_loaded_keys)
+        copied = bool(self._selected_key and self._selected_key in self._copied_keys)
+        tested = bool(self._selected_key and self._tested_keys_ok.get(self._selected_key))
 
-        if hasattr(self, "_busy_overlay"):
-            if busy:
-                self._busy_label.setText(message or "Working…")
-                self._busy_overlay.setVisible(True)
-                self._busy_overlay.raise_()
-            else:
-                self._busy_overlay.setVisible(False)
-                self._current_worker = None
+        self.step_generate.setText(self._step_line(has_key, "Select or generate a key"))
+        self.step_agent.setText(self._step_line(in_agent, "Start agent and add selected key"))
+        self.step_copy.setText(self._step_line(copied, "Copy public key and add it to Git host"))
+        self.step_test.setText(self._step_line(tested, "Run SSH test to verify authentication"))
 
-    def _run_async(self, label: str, fn, on_done):
-        if self._busy:
-            return
-        self._set_busy(True, f"{label}…")
-        self.write(f"{label}…")
+        self.step_generate.setObjectName("StepDone" if has_key else "StepTodo")
+        self.step_agent.setObjectName("StepDone" if in_agent else "StepTodo")
+        self.step_copy.setObjectName("StepDone" if copied else "StepTodo")
+        self.step_test.setObjectName("StepDone" if tested else "StepTodo")
 
-        worker = _Worker(fn)
-        self._current_worker = worker
-        worker.signals.finished.connect(lambda res: self._on_async_done(label, res, on_done))
-        worker.signals.failed.connect(lambda err: self._on_async_fail(label, err))
-        self._pool.start(worker)
-
-    def _on_async_done(self, label: str, result, on_done):
-        try:
-            self.write(f"{label} done.")
-            on_done(result)
-        finally:
-            self._set_busy(False, "Ready")
-
-    def _on_async_fail(self, label: str, err: str):
-        self._set_busy(False, "Ready")
-        self.write(f"{label} failed: {err}")
-        self._show_actionable_error(
-            title="Operation failed",
-            summary=f"{label} failed.",
-            details=err,
-        )
-
-    def _show_actionable_error(
-        self,
-        title: str,
-        summary: str,
-        details: str | None = None,
-        next_steps: str | None = None,
-    ):
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Critical)
-        box.setWindowTitle(title)
-        box.setText(summary)
-        if next_steps:
-            box.setInformativeText(next_steps)
-        if details:
-            box.setDetailedText(details)
-        box.exec()
-
-
-
-    def refresh_state(self):
-        # Populate key list
-        if hasattr(self, "key_list"):
-            self._refresh_key_list()
-        
-        # Update public key tab with all keys
-        keys = list_ssh_keys()
-        if keys:
-            all_keys_text = ""
-            for key_info in keys:
-                pub = load_public_key(key_info["name"])
-                if pub:
-                    used_marker = "[USED] " if key_info["name"] in self._used_keys else ""
-                    all_keys_text += f"# {used_marker}{key_info['name']}\n{pub}\n\n"
-            self.public_key.setPlainText(all_keys_text.strip())
-        else:
-            self.public_key.setPlainText("No keys found. Generate one first.")
-        
-        has_keys = bool(keys)
-        self.btn_copy.setEnabled(has_keys and not self._busy)
-        
-        if hasattr(self, "guided_btn_key"):
-            self.guided_btn_key.setEnabled(not self._busy)
-            self.guided_btn_test.setEnabled(not self._busy)
-
-        if hasattr(self, "guided_stack"):
-            self._guided_update_nav()
-
-
-
-    def _refresh_key_list(self):
-        """Refresh the list of SSH keys."""
-        if not hasattr(self, "key_list"):
-            return
-
-        # Import here so QListWidgetItem is always bound, even when there are no keys.
-        from PySide6.QtWidgets import QListWidgetItem
-        
-        self.key_list.clear()
-        keys = list_ssh_keys()
-        
-        for key_info in keys:
-            key_name = key_info["name"]
-            is_used = key_name in self._used_keys
-
-            item = QListWidgetItem()
-            
-            status = "✓ Used" if is_used else "○ Not used"
-            item.setText(f"{key_name}  [{status}]")
-            item.setData(Qt.ItemDataRole.UserRole, key_info)
-            
-            self.key_list.addItem(item)
-        
-        if not keys:
-            item = QListWidgetItem("No keys found. Generate one first.")
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.key_list.addItem(item)
-    
-    def _on_key_selected(self):
-        """Handle key selection from the list."""
-        items = self.key_list.selectedItems()
-        if not items:
-            self.btn_copy_selected.setEnabled(False)
-            self.btn_mark_used.setEnabled(False)
-            self.selected_key_label.setText("Select a key to view details")
-            self._selected_key = None
-            return
-        
-        key_info = items[0].data(Qt.ItemDataRole.UserRole)
-        if not key_info:
-            return
-        
-        self._selected_key = key_info["name"]
-        self.btn_copy_selected.setEnabled(True)
-        self.btn_mark_used.setEnabled(True)
-        
-        pub_key = load_public_key(self._selected_key)
-        if pub_key:
-            preview = pub_key[:60] + "..." if len(pub_key) > 60 else pub_key
-            self.selected_key_label.setText(f"Key: {self._selected_key}\n{preview}")
-            self.selected_key_label.setStyleSheet("color: #e8ecf3;")
-    
-    def _copy_selected_key(self):
-        """Copy the selected key to clipboard."""
-        if not self._selected_key:
-            return
-        
-        pub_key = load_public_key(self._selected_key)
-        if not pub_key:
-            QMessageBox.critical(self, "Error", "Public key not found.")
-            return
-        
-        QGuiApplication.clipboard().setText(pub_key)
-        self.statusBar().showMessage(f"Copied {self._selected_key}")
-        self.write(f"Copied {self._selected_key} to clipboard")
-        self._animate_button(self.btn_copy_selected)
-    
-    def _mark_key_used(self):
-        """Mark the selected key as used."""
-        if not self._selected_key:
-            return
-        
-        self._used_keys.add(self._selected_key)
-        self._refresh_key_list()
-        self.statusBar().showMessage(f"Marked {self._selected_key} as used")
-        self.write(f"Marked {self._selected_key} as used")
-    
-    def _animate_button(self, button: QPushButton):
-        """Add a success animation to a button."""
-        original_text = button.text()
-        button.setText("✓ " + original_text)
-        
-        # Scale animation
-        anim = QPropertyAnimation(button, b"minimumHeight", self)
-        anim.setDuration(200)
-        start_height = button.height()
-        anim.setStartValue(start_height)
-        anim.setEndValue(int(start_height * 1.08))
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
-        
-        def reset():
-            button.setText(original_text)
-            button.setMinimumHeight(0)
-        
-        QTimer.singleShot(600, reset)
-
-    def on_copy(self):
-        """Copy key from the public key tab."""
-        text = self.public_key.toPlainText().strip()
-        if not text:
-            QMessageBox.critical(self, "Error", "No public key to copy.")
-            return
-        
-        QGuiApplication.clipboard().setText(text)
-        self.statusBar().showMessage("Public key copied")
-        self.write("Public key copied to clipboard")
-        self._animate_button(self.btn_copy)
-
-
-
-
-
-    def on_open_ssh_folder(self):
-        # Open the .ssh folder
-        try:
-            ssh_dir = Path.home() / ".ssh"
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(ssh_dir)))
-        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-            QMessageBox.critical(self, "Open folder failed", str(exc))
-
-
+        self.step_generate.style().polish(self.step_generate)
+        self.step_agent.style().polish(self.step_agent)
+        self.step_copy.style().polish(self.step_copy)
+        self.step_test.style().polish(self.step_test)
 
 
 if __name__ == "__main__":

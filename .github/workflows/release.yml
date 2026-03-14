@@ -3,12 +3,13 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
+      - 'v*.*.*-*'
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag to publish (e.g., v1.2.3). Required when manually dispatching."
-        required: false
+        required: true
         type: string
 
 permissions:
@@ -41,14 +42,14 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed --name ssh-key-setup main.py
 
-      - name: Package artifact
+      - name: Prepare release binary
         shell: bash
         run: |
           set -euo pipefail
           python - << 'PY'
           import os
           import platform
-          import zipfile
+            import shutil
           from pathlib import Path
 
           tag = os.getenv('GITHUB_REF_NAME', 'dev')
@@ -56,8 +57,9 @@ jobs:
           arch = platform.machine().lower()
 
           name = 'ssh-key-setup'
-          exe = name + ('.exe' if sys.startswith('windows') else '')
-          binary = Path('dist') / exe
+            ext = '.exe' if sys.startswith('windows') else ''
+            exe = name + ext
+            binary = Path('dist') / exe
           if not binary.exists():
               # PyInstaller sometimes nests inside a folder on some platforms
               nested = Path('dist') / name / exe
@@ -67,11 +69,10 @@ jobs:
           if not binary.exists():
               raise SystemExit(f'Built binary not found: {binary}')
 
-          out = Path('dist') / f'{name}-{tag}-{sys}-{arch}.zip'
+          out = Path('dist') / f'{name}-{tag}-{sys}-{arch}{ext}'
           out.parent.mkdir(parents=True, exist_ok=True)
 
-          with zipfile.ZipFile(out, 'w', compression=zipfile.ZIP_DEFLATED) as z:
-              z.write(binary, arcname=exe)
+          shutil.copy2(binary, out)
 
           print(out.as_posix())
           PY
@@ -80,7 +81,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ssh-key-setup-${{ matrix.os }}
-          path: dist/*.zip
+          path: |
+            dist/ssh-key-setup-*
+            !dist/*.spec
 
   release:
     needs: build
@@ -107,6 +110,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: artifacts/**/**/*.zip
+          files: artifacts/**/ssh-key-setup-*
           generate_release_notes: true
           fail_on_unmatched_files: true

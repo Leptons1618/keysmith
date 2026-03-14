@@ -5,6 +5,7 @@ explicit identity file to avoid relying on ssh-agent or SSH config.
 """
 
 import subprocess
+import platform
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +16,7 @@ def generate_key(
     algorithm: KeyAlgorithm = "ed25519",
     key_name: str = "id_ed25519",
     comment: str | None = None,
+    passphrase: str | None = None,
     force: bool = False,
 ) -> str:
     """Generate an SSH key with specified algorithm.
@@ -23,6 +25,7 @@ def generate_key(
         algorithm: Key algorithm (ed25519, rsa, ecdsa)
         key_name: Name for the key file (without .ssh/ prefix)
         comment: Optional comment to add to the key
+        passphrase: Optional passphrase for the private key
         force: If True, overwrite existing key without prompting
 
     Returns:
@@ -36,7 +39,7 @@ def generate_key(
         key_path.unlink(missing_ok=True)
         Path(f"{key_path}.pub").unlink(missing_ok=True)
 
-    cmd = ["ssh-keygen", "-t", algorithm, "-f", str(key_path), "-N", ""]
+    cmd = ["ssh-keygen", "-t", algorithm, "-f", str(key_path), "-N", passphrase or ""]
     
     # Add key size for RSA
     if algorithm == "rsa":
@@ -49,6 +52,23 @@ def generate_key(
     if result.returncode == 0:
         return f"Key '{key_name}' generated successfully."
     return f"Key generation failed: {result.stderr.strip()}"
+
+
+def get_key_fingerprint(key_name: str) -> str | None:
+    """Return fingerprint line for a public key, if available."""
+    pub_path = Path.home() / ".ssh" / f"{key_name}.pub"
+    if not pub_path.exists():
+        return None
+
+    cp = subprocess.run(
+        ["ssh-keygen", "-lf", str(pub_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if cp.returncode != 0:
+        return None
+    return cp.stdout.strip() or None
 
 
 def list_ssh_keys() -> list[dict[str, str]]:
@@ -98,6 +118,57 @@ def load_public_key(key_name: str | None = None) -> str | None:
 def get_private_key_path(key_name: str) -> Path:
     """Return the private key path for a key name under ~/.ssh."""
     return (Path.home() / ".ssh" / key_name).expanduser()
+
+
+def start_ssh_agent() -> str:
+    """Best-effort startup/check for SSH agent.
+
+    Returns:
+        Human-readable status message.
+    """
+    if platform.system() == "Windows":
+        script = (
+            "$service = Get-Service -Name ssh-agent -ErrorAction Stop; "
+            "if ($service.Status -ne 'Running') { Start-Service ssh-agent }; "
+            "(Get-Service -Name ssh-agent).Status"
+        )
+        cp = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if cp.returncode == 0 and "Running" in cp.stdout:
+            return "SSH agent is running."
+        return f"Could not start SSH agent: {(cp.stderr or cp.stdout).strip()}"
+
+    cp = subprocess.run(["ssh-add", "-l"], capture_output=True, text=True, check=False)
+    if cp.returncode in (0, 1):
+        return "SSH agent is available."
+    return "SSH agent is not reachable in this session. Start it in your terminal and relaunch the app."
+
+
+def add_key_to_agent(key_name: str) -> str:
+    """Add a private key file from ~/.ssh into SSH agent.
+
+    Args:
+        key_name: Key file name under ~/.ssh.
+
+    Returns:
+        Human-readable status message.
+    """
+    key_path = get_private_key_path(key_name)
+    if not key_path.exists():
+        return f"Private key not found: {key_path}"
+
+    cp = subprocess.run(["ssh-add", str(key_path)], capture_output=True, text=True, check=False)
+    if cp.returncode == 0:
+        return f"Added '{key_name}' to SSH agent."
+
+    text = (cp.stderr or cp.stdout).strip()
+    if "Could not open a connection to your authentication agent" in text:
+        return "SSH agent is not running. Start it first, then retry."
+    return f"Failed to add key to agent: {text}"
 
 
 def test_connections(key_name: str | None = None) -> dict[str, tuple[bool, str]]:

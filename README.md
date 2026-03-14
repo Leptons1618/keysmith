@@ -1,14 +1,22 @@
 # SSH Key Setup (GUI)
 
-A small desktop application that helps you generate an SSH key, load it into an SSH agent, and verify connectivity to common Git hosts.
+A minimal desktop application that helps you generate, manage, and verify SSH keys with a guided UI.
 
 ## Features
 
-- Guided setup (step-by-step)
-- Generates an Ed25519 SSH key
-- Adds the key to the SSH agent
-- Copies the public key to your clipboard
-- Tests SSH connectivity to GitHub and Bitbucket
+- Guided setup checklist in-app (generate, add to agent, copy/add to host, test)
+- Key management sidebar (view, select, refresh, delete)
+- Generates SSH keys with algorithm choice: Ed25519, RSA, or ECDSA
+- Optional key passphrase support during key creation
+- Optional key comment and overwrite support
+- Shows selected key fingerprint for quick verification
+- Adds selected private key to SSH agent
+- Starts/checks SSH agent (best effort, with platform-aware messaging)
+- Copies selected public key to clipboard
+- Opens GitHub and Bitbucket SSH settings pages directly
+- Tests SSH connectivity to GitHub and Bitbucket using selected identity
+- Activity log for every operation
+- Remembers key workflow state across app restarts (added/copied/tested/agent markers)
 
 ## Requirements
 
@@ -32,13 +40,17 @@ A small desktop application that helps you generate an SSH key, load it into an 
 
    - `python main.py`
 
-## How the setup works
+## How to use the app
 
-1. Start the SSH agent
-2. Generate an SSH key (Ed25519)
-3. Add the key to the agent
-4. Copy the public key and add it to your Git host
-5. Test the SSH connection
+1. Click `Start / Check SSH Agent`
+2. Enter key details and click `Generate Key`
+3. Select the key from the left sidebar
+4. Click `Add Key to SSH Agent`
+5. Click `Copy Public Key`
+6. Open your Git host SSH settings page and paste the key
+7. Click `Run SSH Test`
+
+The `Guided Steps` panel shows what is done and what is still pending for the selected key.
 
 For a more detailed explanation, see:
 
