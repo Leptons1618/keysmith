@@ -49,7 +49,7 @@ jobs:
           python - << 'PY'
           import os
           import platform
-            import shutil
+          import shutil
           from pathlib import Path
 
           tag = os.getenv('GITHUB_REF_NAME', 'dev')
@@ -57,9 +57,9 @@ jobs:
           arch = platform.machine().lower()
 
           name = 'ssh-key-setup'
-            ext = '.exe' if sys.startswith('windows') else ''
-            exe = name + ext
-            binary = Path('dist') / exe
+          ext = '.exe' if sys.startswith('windows') else ''
+          exe = name + ext
+          binary = Path('dist') / exe
           if not binary.exists():
               # PyInstaller sometimes nests inside a folder on some platforms
               nested = Path('dist') / name / exe
