@@ -1,24 +1,9 @@
 package core
 
 import (
-	"os"
-	"path/filepath"
+	"runtime"
 	"testing"
 )
-
-// shimDir builds a directory of fake OpenSSH tools that respond with canned
-// output, and prepends it to PATH for the duration of the test.
-func shimDir(t *testing.T, scripts map[string]string) {
-	t.Helper()
-	dir := t.TempDir()
-	for name, body := range scripts {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
 
 var gh = func() Service { s, _ := ServiceByID("github"); return s }()
 var gl = func() Service { s, _ := ServiceByID("gitlab"); return s }()
@@ -49,9 +34,10 @@ func TestServiceRegistryComplete(t *testing.T) {
 
 func TestTestServiceSuccessOnPort22(t *testing.T) {
 	withTempHOME(t)
-	shimDir(t, map[string]string{
-		"ssh": `echo "Hi username! You've successfully authenticated, but GitHub does not provide shell access." >&2; exit 0`,
+	restore := fakeTool(t, func(name string, args []string) (string, int) {
+		return "Hi username! You've successfully authenticated, but GitHub does not provide shell access.", 0
 	})
+	defer restore()
 
 	r := TestService(gh, "")
 	if !r.OK {
@@ -64,9 +50,11 @@ func TestTestServiceSuccessOnPort22(t *testing.T) {
 
 func TestTestServiceGitLabSuccessWording(t *testing.T) {
 	withTempHOME(t)
-	shimDir(t, map[string]string{
-		"ssh": `echo "Welcome to GitLab, @user!" >&2; exit 0`,
+	restore := fakeTool(t, func(name string, args []string) (string, int) {
+		return "Welcome to GitLab, @user!", 0
 	})
+	defer restore()
+
 	// GitLab's banner lacks both magic phrases; accept via generic wording.
 	// The current sniffer requires them, so this asserts documented behavior:
 	// GitLab success text must contain 'successfully authenticated' or
@@ -79,23 +67,15 @@ func TestTestServiceGitLabSuccessWording(t *testing.T) {
 
 func TestTestServiceFallbackTo443(t *testing.T) {
 	withTempHOME(t)
-	dir := t.TempDir()
-	script := `#!/bin/sh
-for arg in "$@"; do
-  if [ "$prev" = "-o" ] || [ "$arg" = "Hostname=ssh.github.com" ] || [ "$arg" = "Hostname=altssh.gitlab.com" ]; then
-    echo "Hi! You've successfully authenticated." >&2
-    exit 0
-  fi
-  prev="$arg"
-done
-echo "ssh: connect to host github.com port 22: Connection timed out" >&2
-exit 255
-`
-	path := filepath.Join(dir, "ssh")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	restore := fakeTool(t, func(name string, args []string) (string, int) {
+		for _, arg := range args {
+			if arg == "Hostname=ssh.github.com" || arg == "Hostname=altssh.gitlab.com" {
+				return "Hi! You've successfully authenticated.", 0
+			}
+		}
+		return "ssh: connect to host github.com port 22: Connection timed out", 255
+	})
+	defer restore()
 
 	for _, svcID := range []string{"github", "gitlab"} {
 		svc, _ := ServiceByID(svcID)
@@ -108,9 +88,10 @@ exit 255
 
 func TestTestServiceFailureAggregatesAttempts(t *testing.T) {
 	withTempHOME(t)
-	shimDir(t, map[string]string{
-		"ssh": `echo "Permission denied (publickey)." >&2; exit 255`,
+	restore := fakeTool(t, func(name string, args []string) (string, int) {
+		return "Permission denied (publickey).", 255
 	})
+	defer restore()
 
 	r := TestService(gh, "")
 	if r.OK {
@@ -122,19 +103,27 @@ func TestTestServiceFailureAggregatesAttempts(t *testing.T) {
 }
 
 func TestCheckAgentExitCodeMapping(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("CheckAgent drives the Windows service directly; see agent_windows_test.go")
+	}
 	withTempHOME(t)
 
-	shimDir(t, map[string]string{"ssh-add": `exit 1`})
+	restore := fakeTool(t, func(name string, args []string) (string, int) { return "", 1 })
+	defer restore()
 	if r := CheckAgent(); !r.OK {
 		t.Errorf("exit 1 should mean agent available: %+v", r)
 	}
 
-	shimDir(t, map[string]string{"ssh-add": `exit 0`})
+	restore = fakeTool(t, func(name string, args []string) (string, int) { return "", 0 })
+	defer restore()
 	if r := CheckAgent(); !r.OK {
 		t.Errorf("exit 0 should mean agent available: %+v", r)
 	}
 
-	shimDir(t, map[string]string{"ssh-add": `echo "Could not open a connection to your authentication agent." >&2; exit 2`})
+	restore = fakeTool(t, func(name string, args []string) (string, int) {
+		return "Could not open a connection to your authentication agent.", 2
+	})
+	defer restore()
 	if r := CheckAgent(); r.OK {
 		t.Errorf("exit 2 should mean unreachable: %+v", r)
 	} else if !contains(r.Message, "not reachable") {
@@ -155,14 +144,16 @@ func TestAddToAgentPaths(t *testing.T) {
 		t.Fatalf("generate failed: %+v", r)
 	}
 
-	shimDir(t, map[string]string{"ssh-add": `exit 0`})
+	restore := fakeTool(t, func(name string, args []string) (string, int) { return "", 0 })
+	defer restore()
 	if r := AddToAgent("id_agent_test"); !r.OK || !contains(r.Message, "Added") {
 		t.Errorf("success path: %+v", r)
 	}
 
-	shimDir(t, map[string]string{
-		"ssh-add": `echo "Could not open a connection to your authentication agent." >&2; exit 2`,
+	restore = fakeTool(t, func(name string, args []string) (string, int) {
+		return "Could not open a connection to your authentication agent.", 2
 	})
+	defer restore()
 	r = AddToAgent("id_agent_test")
 	if r.OK || !contains(r.Message, "agent is not running") {
 		t.Errorf("no-agent path: %+v", r)

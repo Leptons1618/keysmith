@@ -1,9 +1,11 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -27,10 +29,52 @@ func TestValidKeyName(t *testing.T) {
 	}
 }
 
-// withTempHOME points HOME at a fresh directory for the duration of the test.
+// withTempHOME points the home directory at a fresh directory for the
+// duration of the test. os.UserHomeDir reads USERPROFILE on Windows and HOME
+// elsewhere, so both are set.
 func withTempHOME(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
+// fakeTool replaces the external OpenSSH tools (ssh, ssh-add, ssh-keygen)
+// with a canned-output fake, so tests behave identically on every OS.
+// fn maps an invocation to its combined output and exit code. The returned
+// restore func must be deferred by the caller.
+func fakeTool(t *testing.T, fn func(name string, args []string) (string, int)) (restore func()) {
+	t.Helper()
+	orig := runTool
+	runTool = func(name string, args ...string) *exec.Cmd {
+		out, code := fn(name, args)
+		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
+		cmd.Env = append(os.Environ(),
+			"FAKE_TOOL_CHILD=1",
+			"FAKE_TOOL_OUTPUT="+out,
+			"FAKE_TOOL_EXIT="+strconv.Itoa(code),
+		)
+		return cmd
+	}
+	return func() { runTool = orig }
+}
+
+// TestHelperProcess is the child side of fakeTool: it echoes the canned
+// output and exits with the canned status. It never runs as a real test.
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("FAKE_TOOL_CHILD") != "1" {
+		t.Skip("helper only runs as a fakeTool child")
+	}
+	fmt.Fprint(os.Stderr, os.Getenv("FAKE_TOOL_OUTPUT"))
+	os.Exit(exitCodeOfHelper())
+}
+
+func exitCodeOfHelper() int {
+	code, err := strconv.Atoi(os.Getenv("FAKE_TOOL_EXIT"))
+	if err != nil || code == 0 {
+		return 0
+	}
+	return code
 }
 
 func requireSSHKeygen(t *testing.T) {

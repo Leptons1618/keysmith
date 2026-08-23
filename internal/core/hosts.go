@@ -2,7 +2,6 @@ package core
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -33,7 +32,7 @@ func testHost(svc Service, keyPath string) HostResult {
 	run := func(extra []string, label string) attempt {
 		args := append(append([]string{}, base...), extra...)
 		args = append(args, "git@"+svc.Host)
-		out, _ := runCmd(exec.Command("ssh", args...))
+		out, _ := runCmd(runTool("ssh", args...))
 		out = trimSpace(out)
 		if out == "" {
 			out = "No output"

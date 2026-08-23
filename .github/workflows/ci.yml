@@ -25,11 +25,14 @@ jobs:
           go-version-file: go.mod
 
       # Fyne links against OpenGL/GLFW, so Linux needs the X11/GL dev headers.
+      # GLFW's Wayland backend needs its own headers too (wl_platform.h).
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev xvfb
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev xorg-dev xvfb \
+            libwayland-dev wayland-protocols libxkbcommon-dev
 
       - name: Test
         if: runner.os != 'Linux'

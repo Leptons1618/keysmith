@@ -14,14 +14,14 @@ func CheckAgent() Result {
 		script := "$service = Get-Service -Name ssh-agent -ErrorAction Stop; " +
 			"if ($service.Status -ne 'Running') { Start-Service ssh-agent }; " +
 			"(Get-Service -Name ssh-agent).Status"
-		out, err := runCmd(exec.Command("powershell", "-NoProfile", "-Command", script))
+		out, err := runCmd(runTool("powershell", "-NoProfile", "-Command", script))
 		if err == nil && strings.Contains(out, "Running") {
 			return Result{OK: true, Message: "SSH agent is running."}
 		}
 		return Result{Message: "Could not start SSH agent: " + trimSpace(out)}
 	}
 
-	_, err := runCmd(exec.Command("ssh-add", "-l"))
+	_, err := runCmd(runTool("ssh-add", "-l"))
 	// 0 = agent with no keys, 1 = agent with keys; anything else is unreachable.
 	if err == nil || (isExitError(err) && exitCodeOf(err) <= 1) {
 		return Result{OK: true, Message: "SSH agent is available."}
@@ -36,7 +36,7 @@ func AddToAgent(keyName string) Result {
 		return Result{Message: "Private key not found: " + keyPath}
 	}
 
-	out, err := runCmd(exec.Command("ssh-add", keyPath))
+	out, err := runCmd(runTool("ssh-add", keyPath))
 	if err == nil {
 		return Result{OK: true, Message: "Added '" + keyName + "' to SSH agent."}
 	}

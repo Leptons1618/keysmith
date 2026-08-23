@@ -108,7 +108,7 @@ func GenerateKey(algo KeyAlgorithm, keyName, comment, passphrase string, force b
 		args = append(args, "-C", comment)
 	}
 
-	out, err := runCmd(exec.Command("ssh-keygen", args...))
+	out, err := runCmd(runTool("ssh-keygen", args...))
 	if err != nil {
 		return Result{Message: fmt.Sprintf("Key generation failed: %s", out)}
 	}
@@ -133,7 +133,7 @@ func Fingerprint(keyName string) string {
 	if _, err := os.Stat(pubPath); err != nil {
 		return ""
 	}
-	out, err := runCmd(exec.Command("ssh-keygen", "-lf", pubPath))
+	out, err := runCmd(runTool("ssh-keygen", "-lf", pubPath))
 	if err != nil {
 		return ""
 	}
@@ -150,6 +150,12 @@ func DeleteKey(keyName string) error {
 	_ = os.Remove(PrivateKeyPath(keyName))
 	return os.Remove(PrivateKeyPath(keyName) + ".pub")
 }
+
+// runTool builds a command for an external OpenSSH tool (ssh, ssh-add,
+// ssh-keygen). It exists so tests can substitute fake tools cross-platform:
+// PATH-shim scripts are not executable on Windows, so tests swap runTool
+// itself instead.
+var runTool = exec.Command
 
 // runCmd captures combined output and normalizes CRLF on Windows.
 func runCmd(cmd *exec.Cmd) (string, error) {
