@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -52,75 +53,141 @@ BITBUCKET_SSH_URL = "https://bitbucket.org/account/settings/ssh-keys/"
 STATE_FILE = Path.home() / ".ssh-key-gui-state.json"
 
 
-LIGHT_STYLESHEET = """
-QWidget { font-family: Segoe UI, Arial; font-size: 10pt; }
-QMainWindow { background-color: #f0f3f8; }
+STYLESHEET = """
+QWidget { font-family: 'Segoe UI', 'Ubuntu', 'Helvetica Neue', Arial, sans-serif; font-size: 10pt; color: #1b2025; }
+QMainWindow, QDialog { background: #eef0f3; }
 
-QLabel#Title { font-size: 19pt; font-weight: 600; color: #152033; }
-QLabel#Subtitle { color: #4e5d78; }
-QLabel#StepDone { color: #1a7f37; font-weight: 600; }
-QLabel#StepTodo { color: #4e5d78; }
+QLabel#Title { font-size: 17pt; font-weight: 700; color: #1b2025; }
+QLabel#Subtitle { color: #585e66; margin-top: 2px; }
+QLabel#KeyName { font-size: 15pt; font-weight: 700; }
+QLabel#MetaLine { color: #585e66; font-size: 9.5pt; }
+QLabel#StepTodo { color: #585e66; }
+QLabel#StepDone { color: #006d68; font-weight: 600; }
+QLabel#WarningText { color: #895c07; font-weight: 600; }
+QLabel#Badge {
+    font-size: 8.5pt; font-weight: 700; color: #585e66;
+    border: 1px solid #d5d8db; border-radius: 2px;
+    padding: 2px 8px; background: transparent;
+}
+QLabel#BadgeOn { color: #006d68; border-color: #72aba7; background: #d2efec; }
+QLabel#BadgeWarn { color: #895c07; border-color: #cfa954; background: #feecd3; }
+QLabel#EmptyHint { color: #585e66; }
 
 QGroupBox {
-    color: #152033;
-    border: 1px solid #d5dceb;
-    border-radius: 8px;
-    margin-top: 10px;
-    padding: 10px;
-    background: #ffffff;
+    font-weight: 600;
+    color: #1b2025;
+    border: 1px solid #d5d8db;
+    border-radius: 2px;
+    background: #f5f7f9;
+    padding: 8px;
+    margin-top: 0;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 6px;
-    color: #4e5d78;
+    left: 8px;
+    padding: 0 4px;
+    background: #eef0f3;
+    color: #585e66;
+    font-size: 8.5pt;
+    font-weight: 700;
+    letter-spacing: 1px;
 }
 
-QLineEdit, QPlainTextEdit, QListWidget, QComboBox {
-    background: #f7f9fd;
-    border: 1px solid #d5dceb;
-    border-radius: 6px;
-    padding: 8px;
-    color: #152033;
-    selection-background-color: #1967d2;
+QLineEdit, QPlainTextEdit, QComboBox, QListWidget {
+    background: #fbfcfd;
+    border: 1px solid #d5d8db;
+    border-radius: 2px;
+    padding: 6px 8px;
+    color: #1b2025;
+    selection-background-color: #1b2025;
+    selection-color: #ffffff;
+}
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QListWidget:focus { border-color: #006d68; }
+QLineEdit:disabled { color: #71757a; background: #eef0f3; }
+QPlainTextEdit { font-family: 'Consolas', 'DejaVu Sans Mono', ui-monospace, monospace; font-size: 9pt; }
+QListWidget { padding: 2px; background: #fbfcfd; }
+QListWidget::item { padding: 7px 8px; border-bottom: 1px solid #e2e5ea; }
+QListWidget::item:selected { background: #1b2025; color: #ffffff; }
+QListWidget::item:hover:!selected { background: #dadee3; }
+
+QComboBox::drop-down { border: none; width: 20px; }
+QComboBox::down-arrow {
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #1b2025;
+    margin-right: 6px;
+}
+QComboBox QAbstractItemView {
+    background: #fbfcfd;
+    border: 1px solid #d5d8db;
+    selection-background-color: #006d68;
+    selection-color: #ffffff;
 }
 
-QPlainTextEdit { font-family: Consolas, ui-monospace, monospace; font-size: 9.5pt; }
+QCheckBox { spacing: 8px; }
+QCheckBox::indicator {
+    width: 15px; height: 15px;
+    border: 1px solid #b4b8bc;
+    border-radius: 2px;
+    background: #fbfcfd;
+}
+QCheckBox::indicator:hover { border-color: #006d68; }
+QCheckBox::indicator:checked { background: #006d68; border-color: #006d68; }
 
 QPushButton {
-    background: #f7f9fd;
-    border: 1px solid #d5dceb;
-    border-radius: 6px;
-    padding: 8px 12px;
-    color: #152033;
+    background: transparent;
+    border: 1px solid #1b2025;
+    border-radius: 2px;
+    padding: 7px 16px;
+    color: #1b2025;
+    font-weight: 600;
 }
-QPushButton:hover { background: #eef3fb; border-color: #bcc9e0; }
-QPushButton:disabled { color: #8b96ac; background: #f7f9fd; border-color: #e2e8f3; }
+QPushButton:hover { background: #006d68; color: #ffffff; }
+QPushButton:pressed { background: #31363c; color: #ffffff; }
+QPushButton:focus { background: #dadee3; color: #1b2025; }
+QPushButton:disabled { color: #71757a; border-color: #c3c8cd; background: transparent; }
 
-QPushButton#Primary {
-    background: #1967d2;
-    border-color: #1967d2;
-    color: #ffffff;
-}
-QPushButton#Primary:hover { background: #135abf; }
+QPushButton#Primary { background: #006d68; color: #ffffff; }
+QPushButton#Primary:hover { background: #005a55; }
+QPushButton#Primary:pressed { background: #004a46; }
+QPushButton#Primary:focus { background: #005a55; border: 1px dashed #ffffff; color: #ffffff; }
+QPushButton#Primary:disabled { background: #c3c8cd; border-color: #c3c8cd; color: #eef0f3; }
 
-QPushButton#Danger {
-    background: #cf3a2b;
-    border-color: #cf3a2b;
-    color: #ffffff;
-}
-QPushButton#Danger:hover { background: #bd3224; }
+QPushButton#Danger { background: transparent; border-color: #9e2d28; color: #9e2d28; }
+QPushButton#Danger:hover { background: #9e2d28; color: #ffffff; }
+QPushButton#Danger:pressed { background: #861213; color: #ffffff; }
+QPushButton#Danger:focus { background: #fde7e4; color: #9e2d28; border: 1px dashed #9e2d28; }
+QPushButton#Danger:disabled { color: #71757a; border-color: #c3c8cd; background: transparent; }
 
-QFrame#BusyOverlay {
-    background: rgba(240, 243, 248, 228);
-    border-radius: 14px;
-}
+QPushButton#Ghost { border-color: #b4b8bc; font-weight: 600; }
+QPushButton#Ghost:hover { background: #006d68; color: #ffffff; border-color: #006d68; }
+QPushButton#Ghost:focus { background: #dadee3; }
 
-QPushButton#Cancel {
-    background: #f7f9fd;
-    border-color: #d5dceb;
-    color: #cf3a2b;
-}
+QPushButton#Cancel { background: rgba(27, 32, 37, 205); border-color: #b4b8bc; color: #eef0f3; }
+QPushButton#Cancel:hover { background: #eef0f3; color: #1b2025; }
+
+QFrame#BusyOverlay { background: rgba(27, 32, 37, 205); }
+QLabel#BusyText { color: #eef0f3; font-size: 11pt; font-weight: 600; }
+QFrame#BusyOverlay QProgressBar { background: #31363c; border: none; }
+QFrame#BusyOverlay QProgressBar::chunk { background: #eef0f3; }
+
+QProgressBar { background: #d5d8db; border: none; min-height: 4px; max-height: 4px; }
+QProgressBar::chunk { background: #006d68; }
+
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #c3c8cd; min-height: 30px; border-radius: 0; }
+QScrollBar::handle:vertical:hover { background: #71757a; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #c3c8cd; min-width: 30px; border-radius: 0; }
+QScrollBar::handle:horizontal:hover { background: #71757a; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QSplitter::handle { background: #eef0f3; width: 1px; }
+QSplitter::handle:hover { background: #006d68; }
+
+QStatusBar { background: #eef0f3; color: #585e66; border-top: 1px solid #d5d8db; }
 """
 
 
@@ -184,75 +251,153 @@ class SSHApp(QMainWindow):
 
     def _build_ui(self):  # pylint: disable=too-many-statements
         qt_app = cast(QApplication, QApplication.instance())
-        qt_app.setStyleSheet(LIGHT_STYLESHEET)
+        qt_app.setStyleSheet(STYLESHEET)
 
-        root = QWidget(self)
-        self.setCentralWidget(root)
-        outer = QVBoxLayout(root)
-        outer.setContentsMargins(18, 16, 18, 12)
-        outer.setSpacing(10)
-        self._root = root
+        self._root = QWidget(self)
+        self.setCentralWidget(self._root)
+        outer = QVBoxLayout(self._root)
+        outer.setContentsMargins(14, 12, 14, 6)
+        outer.setSpacing(8)
 
+        # --- header -------------------------------------------------------
+        header_row = QHBoxLayout()
+        header_row.setSpacing(16)
+        heading = QVBoxLayout()
+        heading.setSpacing(0)
         title = QLabel("SSH Key Manager")
         title.setObjectName("Title")
-        subtitle = QLabel("Minimal flow: generate key, add public key to host, verify connection.")
+        subtitle = QLabel("Generate a key, hand the public half to your Git host, verify the connection.")
         subtitle.setObjectName("Subtitle")
-        outer.addWidget(title)
-        outer.addWidget(subtitle)
+        heading.addWidget(title)
+        heading.addWidget(subtitle)
+        header_row.addLayout(heading)
+        header_row.addStretch(1)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        outer.addWidget(splitter, 1)
+        agent_col = QVBoxLayout()
+        agent_col.setSpacing(3)
+        self.lbl_agent_status = self._make_badge("AGENT")
+        btn_header_agent = QPushButton("Check agent")
+        btn_header_agent.setObjectName("Ghost")
+        btn_header_agent.clicked.connect(self._start_agent)
+        agent_col.addWidget(self.lbl_agent_status, 0, Qt.AlignmentFlag.AlignRight)
+        agent_col.addWidget(btn_header_agent, 0, Qt.AlignmentFlag.AlignRight)
+        header_row.addLayout(agent_col)
+        self.btn_start_agent = btn_header_agent
 
-        sidebar = QWidget()
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        sidebar_layout.setSpacing(10)
+        outer.addLayout(header_row)
 
-        list_box = QGroupBox("Saved Keys")
-        list_box_layout = QVBoxLayout(list_box)
+        # --- main vertical split: workbench over activity strip ------------
+        v_split = QSplitter(Qt.Orientation.Vertical)
+        outer.addWidget(v_split, 1)
+
+        # --- keys rail ------------------------------------------------------
+        rail_box = QGroupBox("KEYS")
+        rail_layout = QVBoxLayout(rail_box)
+        rail_layout.setContentsMargins(10, 14, 10, 10)
+        rail_layout.setSpacing(8)
+
         self.key_list = QListWidget()
-        self.key_list.setAlternatingRowColors(True)
-        list_box_layout.addWidget(self.key_list)
-        sidebar_layout.addWidget(list_box, 1)
+        self.key_list.setAlternatingRowColors(False)
+        self.key_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        rail_layout.addWidget(self.key_list, 1)
 
-        side_actions = QHBoxLayout()
-        self.btn_new_key = QPushButton("Generate")
-        self.btn_new_key.setObjectName("Primary")
+        gen_form = QFormLayout()
+        gen_form.setSpacing(6)
+        self.input_key_name = QLineEdit("id_ed25519")
+        self.input_key_name.setPlaceholderText("e.g. id_work_github")
+        self.combo_algorithm = QComboBox()
+        self.combo_algorithm.addItems(["ed25519", "rsa", "ecdsa"])
+        self.input_comment = QLineEdit()
+        self.input_comment.setPlaceholderText("you@laptop")
+        gen_form.addRow("Name", self.input_key_name)
+        gen_form.addRow("Type", self.combo_algorithm)
+        gen_form.addRow("Comment", self.input_comment)
+        rail_layout.addLayout(gen_form)
+
+        pass_row = QHBoxLayout()
+        pass_row.setSpacing(6)
+        self.input_passphrase = QLineEdit()
+        self.input_passphrase.setPlaceholderText("Passphrase")
+        self.input_passphrase.setEchoMode(QLineEdit.EchoMode.Password)
+        self.input_passphrase_confirm = QLineEdit()
+        self.input_passphrase_confirm.setPlaceholderText("Confirm")
+        self.input_passphrase_confirm.setEchoMode(QLineEdit.EchoMode.Password)
+        pass_row.addWidget(self.input_passphrase)
+        pass_row.addWidget(self.input_passphrase_confirm)
+        rail_layout.addLayout(pass_row)
+
+        opts_row = QHBoxLayout()
+        opts_row.setSpacing(12)
+        self.chk_show_passphrase = QCheckBox("Show")
+        self.chk_force = QCheckBox("Overwrite existing")
+        opts_row.addWidget(self.chk_show_passphrase)
+        opts_row.addWidget(self.chk_force)
+        opts_row.addStretch(1)
+        rail_layout.addLayout(opts_row)
+
+        self.btn_generate_welcome = QPushButton("Generate key")
+        self.btn_generate_welcome.setObjectName("Primary")
+        rail_layout.addWidget(self.btn_generate_welcome)
+
+        rail_footer = QHBoxLayout()
+        rail_footer.setSpacing(6)
+        hint = QLabel("Passphrases stay on this machine.")
+        hint.setObjectName("EmptyHint")
+        rail_footer.addWidget(hint, 1)
         self.btn_refresh_keys = QPushButton("Refresh")
-        side_actions.addWidget(self.btn_new_key)
-        side_actions.addWidget(self.btn_refresh_keys)
-        sidebar_layout.addLayout(side_actions)
+        rail_footer.addWidget(self.btn_refresh_keys)
+        rail_layout.addLayout(rail_footer)
 
+        # --- right pane stack ----------------------------------------------
         self.content_stack = QStackedWidget()
         self.page_welcome = self._build_welcome_page()
         self.page_details = self._build_key_details_page()
         self.content_stack.addWidget(self.page_welcome)
         self.content_stack.addWidget(self.page_details)
 
-        splitter.addWidget(sidebar)
-        splitter.addWidget(self.content_stack)
-        splitter.setSizes([320, 760])
-        splitter.setStretchFactor(1, 1)
+        h_split = QSplitter(Qt.Orientation.Horizontal)
+        h_split.setChildrenCollapsible(False)
+        h_split.addWidget(rail_box)
+        h_split.addWidget(self.content_stack)
+        h_split.setSizes([330, 850])
+        h_split.setStretchFactor(0, 0)
+        h_split.setStretchFactor(1, 1)
+        v_split.addWidget(h_split)
+        v_split.setChildrenCollapsible(False)
 
-        activity_box = QGroupBox("Activity")
+        # workbench floor: the details page's natural minimum, so the
+        # activity strip can shrink but never crush it
+        h_min = self.page_details.minimumSizeHint().height()
+        v_split.widget(0).setMinimumHeight(h_min + 24)
+
+        # --- activity strip --------------------------------------------------
+        activity_box = QGroupBox("ACTIVITY")
         activity_layout = QVBoxLayout(activity_box)
+        activity_layout.setContentsMargins(10, 14, 10, 8)
         self.activity_log = QPlainTextEdit()
         self.activity_log.setReadOnly(True)
         self.activity_log.setMaximumBlockCount(300)
-        self.activity_log.setFixedHeight(120)
+        self.activity_log.setMinimumHeight(40)
         activity_layout.addWidget(self.activity_log)
-        outer.addWidget(activity_box)
+        v_split.addWidget(activity_box)
+        v_split.setSizes([760, 130])
+        v_split.setStretchFactor(0, 1)
+        self._v_split = v_split
+        self._h_split = h_split
 
-        self._busy_overlay = QFrame(root)
+        # --- busy overlay ----------------------------------------------------
+        self._busy_overlay = QFrame(self._root)
         self._busy_overlay.setObjectName("BusyOverlay")
         self._busy_overlay.setVisible(False)
         self._busy_overlay.setFrameShape(QFrame.Shape.NoFrame)
+        self._busy_overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         ov = QVBoxLayout(self._busy_overlay)
         ov.setContentsMargins(18, 18, 18, 18)
-        ov.setSpacing(10)
+        ov.setSpacing(12)
         ov.addStretch(1)
 
         self._busy_label = QLabel("Working...")
+        self._busy_label.setObjectName("BusyText")
         self._busy_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         ov.addWidget(self._busy_label)
 
@@ -261,85 +406,69 @@ class SSHApp(QMainWindow):
         self._busy_bar.setTextVisible(False)
         ov.addWidget(self._busy_bar)
 
-        self._busy_cancel = QPushButton("Cancel")
+        self._busy_cancel = QPushButton("Cancel operation")
         self._busy_cancel.setObjectName("Cancel")
-        ov.addWidget(self._busy_cancel)
+        ov.addWidget(self._busy_cancel, 0, Qt.AlignmentFlag.AlignHCenter)
         ov.addStretch(2)
 
         self.setStatusBar(self.statusBar())
         self.statusBar().showMessage("Ready")
         self._update_overlay_geometry()
 
+    def _make_badge(self, text: str) -> QLabel:
+        badge = QLabel(text)
+        badge.setObjectName("Badge")
+        return badge
+
+    def _elide(self, label: QLabel, text: str) -> str:
+        metrics = label.fontMetrics()
+        return metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, max(40, label.width() - 4))
+
+    def _set_key_name_display(self, key_name: str):
+        label = self.key_details_name
+        metrics = label.fontMetrics()
+        elided = metrics.elidedText(
+            key_name, Qt.TextElideMode.ElideMiddle, max(60, label.width() - 8)
+        )
+        label.setText(elided)
+
     def _build_welcome_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
-        intro_box = QGroupBox("Quick Setup")
+        intro_box = QGroupBox("SETUP PATH")
         intro_layout = QVBoxLayout(intro_box)
+        intro_layout.setSpacing(8)
         intro = QLabel(
-            "1) Start SSH agent. 2) Generate key. 3) Add key to agent and copy public key. "
-            "4) Add to Git host. 5) Run connection test."
+            "1 · Start or check the SSH agent\n"
+            "2 · Name the key on the left and press Generate key\n"
+            "3 · Copy the public key and add it to your Git host\n"
+            "4 · Load the private key into the agent\n"
+            "5 · Run the connection test until both hosts answer"
         )
         intro.setWordWrap(True)
         intro_layout.addWidget(intro)
 
-        form = QFormLayout()
-        self.input_key_name = QLineEdit("id_ed25519")
-        self.input_key_name.setPlaceholderText("Example: id_work_github")
-
-        self.combo_algorithm = QComboBox()
-        self.combo_algorithm.addItems(["ed25519", "rsa", "ecdsa"])
-
-        self.input_comment = QLineEdit()
-        self.input_comment.setPlaceholderText("Optional comment (e.g. you@laptop)")
-
-        self.input_passphrase = QLineEdit()
-        self.input_passphrase.setPlaceholderText("Optional passphrase")
-        self.input_passphrase.setEchoMode(QLineEdit.EchoMode.Password)
-
-        self.input_passphrase_confirm = QLineEdit()
-        self.input_passphrase_confirm.setPlaceholderText("Confirm passphrase")
-        self.input_passphrase_confirm.setEchoMode(QLineEdit.EchoMode.Password)
-
-        self.chk_show_passphrase = QCheckBox("Show passphrase")
-
-        self.chk_force = QCheckBox("Overwrite if key already exists")
-        self.chk_force.setChecked(False)
-
-        form.addRow("Key name", self.input_key_name)
-        form.addRow("Algorithm", self.combo_algorithm)
-        form.addRow("Comment", self.input_comment)
-        form.addRow("Passphrase", self.input_passphrase)
-        form.addRow("Confirm", self.input_passphrase_confirm)
-        form.addRow("", self.chk_show_passphrase)
-        form.addRow("", self.chk_force)
-        intro_layout.addLayout(form)
-
-        self.btn_generate_welcome = QPushButton("Generate Key")
-        self.btn_generate_welcome.setObjectName("Primary")
-        self.btn_start_agent_welcome = QPushButton("Start / Check SSH Agent")
-        self.btn_add_agent_welcome = QPushButton("Add Selected Key to Agent")
-        intro_layout.addWidget(self.btn_start_agent_welcome)
-        intro_layout.addWidget(self.btn_add_agent_welcome)
-        intro_layout.addWidget(self.btn_generate_welcome)
+        empty_hint = QLabel("No key selected yet. Generate one on the left, or pick an existing key.")
+        empty_hint.setObjectName("EmptyHint")
+        intro_layout.addWidget(empty_hint)
         layout.addWidget(intro_box)
 
-        guide_box = QGroupBox("Need Help?")
+        guide_box = QGroupBox("GIT HOSTS")
         guide_layout = QVBoxLayout(guide_box)
-        guide = QLabel(
-            "After generation, select the key from the left list, copy the public key, "
-            "add it to your Git host, then run the connection test."
-        )
-        guide.setWordWrap(True)
+        guide = QLabel("Open the SSH settings page, paste the public key, save.")
+        guide.setObjectName("Subtitle")
         guide_layout.addWidget(guide)
 
         links = QHBoxLayout()
-        self.btn_open_github_welcome = QPushButton("Open GitHub SSH Page")
-        self.btn_open_bitbucket_welcome = QPushButton("Open Bitbucket SSH Page")
+        links.setSpacing(8)
+        self.btn_open_github_welcome = QPushButton("GitHub SSH settings")
+        self.btn_open_bitbucket_welcome = QPushButton("Bitbucket SSH settings")
         links.addWidget(self.btn_open_github_welcome)
         links.addWidget(self.btn_open_bitbucket_welcome)
+        links.addStretch(1)
         guide_layout.addLayout(links)
         layout.addWidget(guide_box)
 
@@ -349,24 +478,43 @@ class SSHApp(QMainWindow):
     def _build_key_details_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        header_box = QGroupBox("Selected Key")
-        header_layout = QVBoxLayout(header_box)
+        identity_box = QGroupBox("IDENTITY")
+        identity_layout = QVBoxLayout(identity_box)
+        identity_layout.setSpacing(6)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(10)
         self.key_details_name = QLabel("No key selected")
-        self.key_details_name.setStyleSheet("font-size: 14pt; font-weight: 600;")
-        self.key_details_path = QLabel("Path: -")
-        self.key_details_path.setObjectName("Subtitle")
-        self.key_details_fingerprint = QLabel("Fingerprint: -")
-        self.key_details_fingerprint.setObjectName("Subtitle")
-        header_layout.addWidget(self.key_details_name)
-        header_layout.addWidget(self.key_details_path)
-        header_layout.addWidget(self.key_details_fingerprint)
-        layout.addWidget(header_box)
+        self.key_details_name.setObjectName("KeyName")
+        self.key_details_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.key_details_name.setMinimumWidth(1)
+        self.key_details_name.setMouseTracking(True)
+        name_row.addWidget(self.key_details_name, 1)
+        name_row.addSpacing(4)
+        self.lbl_badge_agent = self._make_badge("IN AGENT")
+        self.lbl_badge_used = self._make_badge("ADDED TO HOST")
+        self.lbl_badge_tested = self._make_badge("TESTED OK")
+        name_row.addWidget(self.lbl_badge_agent)
+        name_row.addWidget(self.lbl_badge_used)
+        name_row.addWidget(self.lbl_badge_tested)
+        name_row.addStretch(1)
+        identity_layout.addLayout(name_row)
 
-        checklist_box = QGroupBox("Guided Steps")
-        checklist_layout = QVBoxLayout(checklist_box)
+        self.key_details_fingerprint = QLabel()
+        self.key_details_fingerprint.setObjectName("MetaLine")
+        self.key_details_fingerprint.setWordWrap(True)
+        self.key_details_path = QLabel()
+        self.key_details_path.setObjectName("MetaLine")
+        self.key_details_path.setWordWrap(True)
+        identity_layout.addWidget(self.key_details_fingerprint)
+        identity_layout.addWidget(self.key_details_path)
+        layout.addWidget(identity_box)
+
+        steps_box = QGroupBox("PROGRESS")
+        checklist_layout = QVBoxLayout(steps_box)
+        checklist_layout.setSpacing(4)
         self.step_generate = QLabel()
         self.step_agent = QLabel()
         self.step_copy = QLabel()
@@ -375,59 +523,52 @@ class SSHApp(QMainWindow):
         checklist_layout.addWidget(self.step_agent)
         checklist_layout.addWidget(self.step_copy)
         checklist_layout.addWidget(self.step_test)
-        layout.addWidget(checklist_box)
+        layout.addWidget(steps_box)
 
-        key_box = QGroupBox("Public Key")
+        key_box = QGroupBox("PUBLIC KEY")
         key_layout = QVBoxLayout(key_box)
         self.public_key_text = QPlainTextEdit()
         self.public_key_text.setReadOnly(True)
+        self.public_key_text.setMinimumHeight(44)
         key_layout.addWidget(self.public_key_text)
         layout.addWidget(key_box, 1)
 
         action_row = QHBoxLayout()
-        self.btn_copy_key = QPushButton("Copy Public Key")
+        action_row.setSpacing(8)
+        self.btn_copy_key = QPushButton("Copy public key")
         self.btn_copy_key.setObjectName("Primary")
-        self.btn_add_key_agent = QPushButton("Add Key to SSH Agent")
-        self.btn_mark_used = QPushButton("Mark as Added to Host")
-        self.btn_delete_key = QPushButton("Delete Key")
+        self.btn_add_key_agent = QPushButton("Add to agent")
+        self.btn_mark_used = QPushButton("Mark as added to host")
+        self.btn_delete_key = QPushButton("Delete key")
         self.btn_delete_key.setObjectName("Danger")
-        action_row.addWidget(self.btn_add_key_agent)
         action_row.addWidget(self.btn_copy_key)
+        action_row.addWidget(self.btn_add_key_agent)
         action_row.addWidget(self.btn_mark_used)
         action_row.addStretch(1)
         action_row.addWidget(self.btn_delete_key)
         layout.addLayout(action_row)
 
-        self.btn_start_agent = QPushButton("Start / Check SSH Agent")
-        layout.addWidget(self.btn_start_agent)
-
-        host_row = QHBoxLayout()
-        self.btn_open_github = QPushButton("Open GitHub SSH Settings")
-        self.btn_open_bitbucket = QPushButton("Open Bitbucket SSH Settings")
-        host_row.addWidget(self.btn_open_github)
-        host_row.addWidget(self.btn_open_bitbucket)
-        layout.addLayout(host_row)
-
-        test_box = QGroupBox("Connection Test")
+        test_box = QGroupBox("CONNECTION TEST")
         test_layout = QVBoxLayout(test_box)
+        test_layout.setSpacing(8)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(10)
         self.test_status_label = QLabel("Not tested yet.")
         self.test_status_label.setObjectName("Subtitle")
-        self.btn_run_test = QPushButton("Run SSH Test")
+        status_row.addWidget(self.test_status_label, 1)
+        self.btn_run_test = QPushButton("Run SSH test")
+        status_row.addWidget(self.btn_run_test)
+        test_layout.addLayout(status_row)
         self.test_result_text = QPlainTextEdit()
         self.test_result_text.setReadOnly(True)
-        self.test_result_text.setFixedHeight(110)
-        test_layout.addWidget(self.test_status_label)
-        test_layout.addWidget(self.btn_run_test)
+        self.test_result_text.setFixedHeight(48)
         test_layout.addWidget(self.test_result_text)
         layout.addWidget(test_box)
 
         return page
 
     def _wire_signals(self):
-        self.btn_new_key.clicked.connect(self._on_generate_requested)
         self.btn_generate_welcome.clicked.connect(self._on_generate_requested)
-        self.btn_start_agent_welcome.clicked.connect(self._start_agent)
-        self.btn_add_agent_welcome.clicked.connect(self._add_selected_key_to_agent)
         self.btn_refresh_keys.clicked.connect(lambda: self._refresh_keys(self._selected_key))
         self.chk_show_passphrase.stateChanged.connect(self._toggle_passphrase_visibility)
 
@@ -438,14 +579,25 @@ class SSHApp(QMainWindow):
         self.btn_mark_used.clicked.connect(self._toggle_mark_used)
         self.btn_delete_key.clicked.connect(self._delete_selected_key)
         self.btn_run_test.clicked.connect(self._run_connection_test)
-        self.btn_start_agent.clicked.connect(self._start_agent)
 
-        self.btn_open_github.clicked.connect(lambda: self._open_host_page("github"))
-        self.btn_open_bitbucket.clicked.connect(lambda: self._open_host_page("bitbucket"))
         self.btn_open_github_welcome.clicked.connect(lambda: self._open_host_page("github"))
         self.btn_open_bitbucket_welcome.clicked.connect(lambda: self._open_host_page("bitbucket"))
 
         self._busy_cancel.clicked.connect(self._cancel_operation)
+
+    def _set_badge(self, badge: QLabel, on: bool):
+        badge.setObjectName("BadgeOn" if on else "Badge")
+        badge.style().unpolish(badge)
+        badge.style().polish(badge)
+
+    def _set_agent_badge(self, state: str):
+        text = {"unknown": "AGENT ?", "on": "AGENT ON", "off": "AGENT OFF"}.get(state, "AGENT ?")
+        style = {"on": "BadgeOn", "off": "BadgeWarn"}.get(state, "Badge")
+        badge = self.lbl_agent_status
+        badge.setText(text)
+        badge.setObjectName(style)
+        badge.style().unpolish(badge)
+        badge.style().polish(badge)
 
     def resizeEvent(self, event):  # noqa: N802  # pylint: disable=invalid-name
         super().resizeEvent(event)
@@ -495,21 +647,14 @@ class SSHApp(QMainWindow):
     def _set_busy(self, busy: bool, message: str | None = None):
         self._busy = busy
         for btn in (
-            self.btn_new_key,
             self.btn_generate_welcome,
-            self.btn_start_agent_welcome,
-            self.btn_add_agent_welcome,
             self.btn_refresh_keys,
+            self.btn_start_agent,
             self.btn_add_key_agent,
             self.btn_copy_key,
             self.btn_mark_used,
             self.btn_delete_key,
             self.btn_run_test,
-            self.btn_start_agent,
-            self.btn_open_github,
-            self.btn_open_bitbucket,
-            self.btn_open_github_welcome,
-            self.btn_open_bitbucket_welcome,
         ):
             btn.setEnabled(not busy)
 
@@ -562,17 +707,9 @@ class SSHApp(QMainWindow):
         self.key_list.clear()
 
         for key in keys:
-            name = key["name"]
-            tags = []
-            if name in self._used_keys:
-                tags.append("added")
-            if self._tested_keys_ok.get(name):
-                tags.append("tested")
-            if name in self._agent_loaded_keys:
-                tags.append("agent")
-            suffix = f"  [{' | '.join(tags)}]" if tags else ""
-            item = QListWidgetItem(f"{name}{suffix}")
+            item = QListWidgetItem(key["name"])
             item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setToolTip(key["name"])
             self.key_list.addItem(item)
 
         if not keys:
@@ -601,23 +738,33 @@ class SSHApp(QMainWindow):
 
         key_info = cast(dict[str, str], current.data(Qt.ItemDataRole.UserRole))
         key_name = key_info["name"]
-        key_path = key_info["path"]
 
         self._selected_key = key_name
         self.content_stack.setCurrentWidget(self.page_details)
 
+        self._set_key_name_display(key_name)
         public_key = load_public_key(key_name) or ""
         fingerprint = get_key_fingerprint(key_name) or "Unknown"
-        self.key_details_name.setText(key_name)
-        self.key_details_path.setText(f"Path: {key_path}")
-        self.key_details_fingerprint.setText(f"Fingerprint: {fingerprint}")
+        self.key_details_name.setToolTip(key_name)
+        self.key_details_path.setToolTip(str(Path.home() / ".ssh" / key_name))
+        self.key_details_fingerprint.setText(
+            f"Fingerprint {self._elide(self.key_details_fingerprint, fingerprint)}"
+        )
+        private_path = str(Path.home() / ".ssh" / key_name)
+        self.key_details_path.setText(
+            f"Private key {self._elide(self.key_details_path, private_path)}"
+        )
         self.public_key_text.setPlainText(public_key)
         self.test_result_text.clear()
 
         if self._tested_keys_ok.get(key_name):
-            self.test_status_label.setText("Last test: OK")
+            self.test_status_label.setText("Last test: success")
         else:
-            self.test_status_label.setText("Last test: not successful yet")
+            self.test_status_label.setText("Last test: failed or not run yet")
+
+        self._set_badge(self.lbl_badge_agent, key_name in self._agent_loaded_keys)
+        self._set_badge(self.lbl_badge_used, key_name in self._used_keys)
+        self._set_badge(self.lbl_badge_tested, bool(self._tested_keys_ok.get(key_name)))
 
         self._update_mark_used_button()
         self._update_guided_steps()
@@ -666,7 +813,7 @@ class SSHApp(QMainWindow):
                 self.input_passphrase_confirm.clear()
                 self._refresh_keys(select_name=key_name)
             else:
-                QMessageBox.warning(self, "Key Generation", message)
+                QMessageBox.warning(self, "Key generation", message)
 
         self._run_worker(
             fn=generate_task,
@@ -712,19 +859,24 @@ class SSHApp(QMainWindow):
 
     def _update_mark_used_button(self):
         if self._selected_key and self._selected_key in self._used_keys:
-            self.btn_mark_used.setText("Unmark as Added")
+            self.btn_mark_used.setText("Unmark as added")
         else:
-            self.btn_mark_used.setText("Mark as Added to Host")
+            self.btn_mark_used.setText("Mark as added to host")
 
     def _start_agent(self):
         if self._busy:
             return
+        self._set_agent_badge("unknown")
 
         def done(message: str):
             self._log(message)
             self.statusBar().showMessage(message)
-            if "could not" in message.lower() or "not reachable" in message.lower():
+            low = message.lower()
+            if "could not" in low or "not reachable" in low:
+                self._set_agent_badge("off")
                 QMessageBox.warning(self, "SSH Agent", message)
+            else:
+                self._set_agent_badge("on")
 
         self._run_worker(
             fn=start_ssh_agent,
@@ -850,8 +1002,8 @@ class SSHApp(QMainWindow):
         self._update_guided_steps()
 
     def _step_line(self, done: bool, text: str) -> str:
-        prefix = "[Done]" if done else "[Todo]"
-        return f"{prefix} {text}"
+        marker = "[x]" if done else "[ ]"
+        return f"{marker} {text}"
 
     def _update_guided_steps(self):
         has_key = bool(self._selected_key)

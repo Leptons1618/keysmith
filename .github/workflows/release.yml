@@ -15,82 +15,12 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Build (PyInstaller)
-        run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name ssh-key-setup main.py
-
-      - name: Prepare release binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - << 'PY'
-          import os
-          import platform
-          import shutil
-          from pathlib import Path
-
-          tag = os.getenv('GITHUB_REF_NAME', 'dev')
-          sys = platform.system().lower()
-          arch = platform.machine().lower()
-
-          name = 'ssh-key-setup'
-          ext = '.exe' if sys.startswith('windows') else ''
-          exe = name + ext
-          binary = Path('dist') / exe
-          if not binary.exists():
-              # PyInstaller sometimes nests inside a folder on some platforms
-              nested = Path('dist') / name / exe
-              if nested.exists():
-                  binary = nested
-
-          if not binary.exists():
-              raise SystemExit(f'Built binary not found: {binary}')
-
-          out = Path('dist') / f'{name}-{tag}-{sys}-{arch}{ext}'
-          out.parent.mkdir(parents=True, exist_ok=True)
-
-          shutil.copy2(binary, out)
-
-          print(out.as_posix())
-          PY
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ssh-key-setup-${{ matrix.os }}
-          path: |
-            dist/ssh-key-setup-*
-            !dist/*.spec
-
-  release:
-    needs: build
+  validate:
     runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
-
     steps:
       - name: Validate tag
         run: |
@@ -100,7 +30,166 @@ jobs:
             echo "- If you want automatic releases: push a tag (git tag v1.0.0 && git push origin v1.0.0)."
             exit 1
           fi
+          case "${RELEASE_TAG}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Tag '${RELEASE_TAG}' is not semver-like (expected vMAJOR.MINOR.PATCH)."; exit 1 ;;
+          esac
 
+  gui-binaries:
+    name: GUI (${{ matrix.os }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-amd64
+          - os: macos-latest
+            platform: darwin-arm64
+          - os: windows-latest
+            platform: windows-amd64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Native build of the Fyne desktop frontend (default, untagged variant).
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev
+
+      - name: Build desktop GUI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          name="keysmith-${RELEASE_TAG}-${{ matrix.platform }}"
+          ext=""
+          [ "$(uname -s)" = "MINGW"* ] || [ "$(uname -s)" = "CYGWIN"* ] && ext=".exe"
+          go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
+            -o "out/${name}${ext}" ./cmd/keysmith
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-${{ matrix.platform }}
+          path: out/*
+          if-no-files-found: error
+
+  tui-binaries:
+    name: TUI (${{ matrix.goos }}-${{ matrix.goarch }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The `tui` build tag excludes Fyne entirely, so these are pure Go and
+      # cross-compile anywhere without a C toolchain.
+      - name: Cross-compile terminal UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ext=""
+          [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+            go build -tags tui -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
+            -o "out/keysmith-tui-${RELEASE_TAG}-${{ matrix.goos }}-${{ matrix.goarch }}${ext}" \
+            ./cmd/keysmith
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: out/*
+          if-no-files-found: error
+
+  npm-package:
+    name: npm package
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check npm credentials
+        id: auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::warning::NPM_TOKEN secret is not set; skipping npm publish (package still attached to the Release)."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stage package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          mkdir -p pkg/bin
+          cp package.release.json pkg/package.json
+          sed -i "s|0.0.0-PLACEHOLDER|${version}|g" pkg/package.json
+          for f in bin/keysmith*; do
+            [ -f "$f" ] && cp "$f" pkg/bin/
+          done
+          chmod +x pkg/bin/*
+
+      - name: Pack tarball
+        working-directory: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../out
+          npm pack --pack-destination ../out
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: out/*.tgz
+          if-no-files-found: error
+
+      - name: Publish to npm
+        if: steps.auth.outputs.publish == 'true'
+        working-directory: pkg
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+  release:
+    needs: [gui-binaries, tui-binaries, npm-package]
+    runs-on: ubuntu-latest
+
+    steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -110,6 +199,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: artifacts/**/ssh-key-setup-*
+          files: artifacts/**/*
           generate_release_notes: true
           fail_on_unmatched_files: true

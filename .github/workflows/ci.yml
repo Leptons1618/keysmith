@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Fyne links against OpenGL/GLFW, so Linux needs the X11/GL dev headers.
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev xvfb
+
+      - name: Test
+        if: runner.os != 'Linux'
+        shell: bash
+        run: go test -tags gui ./...
+
+      # Fyne's desktop driver needs a display server even when only running tests.
+      - name: Test under Xvfb
+        if: runner.os == 'Linux'
+        shell: bash
+        run: xvfb-run -a go test -tags gui ./...
+
+      - name: Vet
+        shell: bash
+        run: go vet ./...
+
+      - name: Smoke build (TUI, cross-platform targets)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in "windows amd64" "darwin amd64" "darwin arm64"; do
+            read -r goos goarch <<< "$target"
+            echo "== GOOS=${goos} GOARCH=${goarch} =="
+            GOOS="${goos}" GOARCH="${goarch}" CGO_ENABLED=0 \
+              go build -tags tui -trimpath -o /dev/null ./cmd/keysmith
+          done
+
+  python-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Syntax-check legacy Python app
+        run: python -m compileall main.py ssh_utils.py

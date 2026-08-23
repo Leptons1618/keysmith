@@ -33,3 +33,12 @@ Desktop.ini
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Go build output
+/keysmith
+/keysmith.exe
+
+# npm packaging (release staging only)
+/pkg/
+/out/
+*.tgz

@@ -1,0 +1,36 @@
+{
+  "name": "keysmith",
+  "version": "0.0.0-PLACEHOLDER",
+  "description": "Generate, manage, and verify SSH keys with a guided desktop GUI or terminal UI (single binary, downloaded on first run).",
+  "bin": {
+    "keysmith": "bin/keysmith.js",
+    "keysmith-tui": "bin/keysmith.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Leptons1618/keysmith.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Leptons1618/keysmith/issues"
+  },
+  "homepage": "https://github.com/Leptons1618/keysmith#readme",
+  "keywords": [
+    "ssh",
+    "ssh-key",
+    "ssh-agent",
+    "ssh-keygen",
+    "ed25519",
+    "git",
+    "github",
+    "bitbucket",
+    "gitlab",
+    "tui",
+    "gui"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

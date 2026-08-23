@@ -1,4 +1,4 @@
-# SSH Key Setup (GUI)
+# KeySmith
 
 A minimal desktop application that helps you generate, manage, and verify SSH keys with a guided UI.
 
@@ -20,25 +20,35 @@ A minimal desktop application that helps you generate, manage, and verify SSH ke
 
 ## Requirements
 
-- Python 3.12+
+- Go 1.27+ (for the native app)
 - OpenSSH tools available on your system (`ssh`, `ssh-keygen`, `ssh-add`)
+- Linux GUI builds additionally need OpenGL/GLFW dev packages (`libgl1-mesa-dev xorg-dev`)
 
 ## Quick start (development)
 
-1. Create and activate a virtual environment
+1. Build and run the desktop GUI:
 
-   Windows (PowerShell):
+   - `go run ./cmd/keysmith`
 
-   - `python -m venv .venv`
-   - `.\.venv\Scripts\Activate.ps1`
+2. Or run the terminal UI:
 
-2. Install dependencies
+   - `go run -tags tui ./cmd/keysmith --tui`
 
-   - `pip install -r requirements.txt`
+3. On Linux, source the toolchain env first if Go/GL live outside the system paths:
 
-3. Run the app
+   - `. ./env.sh`
 
-   - `python main.py`
+## Install
+
+The fastest way to get the app is via npm (downloads a prebuilt binary on
+first run), or grab a binary directly from
+[Releases](https://github.com/Leptons1618/keysmith/releases):
+
+```sh
+npm install -g keysmith
+keysmith          # desktop GUI
+keysmith --tui    # terminal UI
+```
 
 ## How to use the app
 
@@ -58,15 +68,15 @@ For a more detailed explanation, see:
 
 ## Building a native executable
 
-This project uses PyInstaller for packaging.
+- Desktop GUI (current platform): `go build ./cmd/keysmith`
+- Terminal UI: `CGO_ENABLED=0 go build -tags tui ./cmd/keysmith`
 
-- Install PyInstaller: `pip install pyinstaller`
-- Build: `pyinstaller --noconfirm --clean --onefile --windowed --name ssh-key-setup main.py`
-- Output: `dist/` contains the packaged executable
+Output is a single binary in the repo root.
 
 ## Creating releases
 
-This repository includes a GitHub Actions workflow that builds executables for Windows, macOS, and Linux when you push a tag.
+This repository includes GitHub Actions workflows that build executables for
+Windows, macOS, and Linux (GUI and TUI) plus an npm package when you push a tag.
 
 1. Create a tag (recommended format: `vMAJOR.MINOR.PATCH`)
 2. Push the tag
@@ -76,7 +86,8 @@ Example:
 - `git tag v1.0.0`
 - `git push origin v1.0.0`
 
-The workflow will attach platform-specific zip files to the GitHub Release.
+The workflow will attach GUI binaries, TUI binaries, and the npm tarball to
+the GitHub Release (and publish the npm package when `NPM_TOKEN` is set).
 
 For details, see:
 
