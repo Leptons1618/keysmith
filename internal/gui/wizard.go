@@ -37,13 +37,92 @@ type appUI struct {
 
 	lastGenResult   core.Result
 	lastTestResults []core.HostResult
+	checkedKey      string
 }
 
-func Run() {
+func keyForTest(selected, checked string) string {
+	if checked != "" {
+		return checked
+	}
+	return selected
+}
+
+func deleteAndForget(keyName string, deleteKey func(string) error, forget func(string) error) error {
+	if err := deleteKey(keyName); err != nil {
+		return fmt.Errorf("could not delete key %q: %w", keyName, err)
+	}
+	if err := forget(keyName); err != nil {
+		return fmt.Errorf("key %q was deleted, but its workflow state could not be saved: %w", keyName, err)
+	}
+	return nil
+}
+
+type workflowState interface {
+	MarkCopied(string) error
+	MarkAgentLoaded(string) error
+	RecordTest(string, bool) error
+	MarkUsed(string) error
+	ForgetKey(string) error
+}
+
+func recordCopy(state workflowState, keyName string) error {
+	if err := state.MarkCopied(keyName); err != nil {
+		return fmt.Errorf("could not save copied-key state: %w", err)
+	}
+	return nil
+}
+
+func recordAgentLoad(state workflowState, keyName string) error {
+	if err := state.MarkAgentLoaded(keyName); err != nil {
+		return fmt.Errorf("could not save agent state: %w", err)
+	}
+	return nil
+}
+
+func recordTest(state workflowState, keyName string, ok bool) error {
+	if err := state.RecordTest(keyName, ok); err != nil {
+		return fmt.Errorf("could not save test result: %w", err)
+	}
+	return nil
+}
+
+func recordServiceUse(state workflowState, keyName string) error {
+	if err := state.MarkUsed(keyName); err != nil {
+		return fmt.Errorf("could not save service state: %w", err)
+	}
+	return nil
+}
+
+func forgetDeletedKey(state workflowState, keyName string) error {
+	if err := state.ForgetKey(keyName); err != nil {
+		return fmt.Errorf("could not save deleted-key workflow state: %w", err)
+	}
+	return nil
+}
+
+func forgetDeletedKeyStore(state workflowState, keyName string) error {
+	return state.ForgetKey(keyName)
+}
+
+func checkAgent(ctx context.Context, operation func(context.Context) core.Result) core.Result {
+	return operation(ctx)
+}
+
+func keyIndex(keys []core.KeyInfo, name string) int {
+	for i := range keys {
+		if keys[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// Run starts the desktop GUI and returns after its application loop ends.
+func Run(version string) error {
 	fyneapp.SetMetadata(fyne.AppMetadata{
 		ID:         "io.keysmith.desktop",
 		Name:       "KeySmith",
-		Version:    "2.0.0",
+		Version:    version,
 		Migrations: map[string]bool{"fyneDo": true},
 	})
 	a := app.New()
@@ -56,6 +135,7 @@ func Run() {
 	ui.showHome()
 
 	w.ShowAndRun()
+	return nil
 }
 
 // --- shared chrome --------------------------------------------------------
@@ -178,8 +258,8 @@ func (u *appUI) showHome() {
 		choiceCard("1", "Set up a new SSH key", "Forge a fresh key pair, then wire it to GitHub, GitLab or Bitbucket.", u.showForm),
 		choiceCard("2", "Manage existing keys", "Inspect your key wall, copy public keys, add to the agent, delete.", func() { u.showBrowser(false) }),
 		choiceCard("3", "Test a connection", "Pick a key and a service; we shake hands and report honestly.", func() { u.showBrowser(true) }),
+		choiceCard("4", "Check SSH agent", "See whether this session can reach your SSH agent.", u.checkAgentFlow),
 	)
-
 	content := container.NewVBox(
 		hero("Welcome", "What would you like to do?", ""),
 		cards,
@@ -241,7 +321,7 @@ func (u *appUI) showForm() {
 			}
 		}
 		u.runOp("Forging your key...", func(ctx context.Context) {
-			u.lastGenResult = core.GenerateKey(chosen, name, strings.TrimSpace(commentEntry.Text), passEntry.Text, forceCheck.Checked)
+			u.lastGenResult = core.GenerateKeyContext(ctx, chosen, name, strings.TrimSpace(commentEntry.Text), passEntry.Text, forceCheck.Checked)
 		}, func() {
 			res := u.lastGenResult
 			if res.OK {
@@ -304,7 +384,7 @@ func (u *appUI) showKeyReady(newName string) {
 			lbl.Refresh()
 		},
 	)
-	list.Select(len(u.keys) - 1)
+	list.Select(keyIndex(u.keys, newName))
 
 	copyBtn := widget.NewButton("Copy public key", func() { u.copyPubKey(newName) })
 	copyBtn.Importance = widget.HighImportance
@@ -485,7 +565,7 @@ func (u *appUI) showInstructions() {
 // --- RESULT ---------------------------------------------------------------------------------------
 
 func (u *appUI) showResult() {
-	keyDisp, _ := elideName(u.subjectKey())
+	keyDisp, _ := elideName(keyForTest(u.selected, u.checkedKey))
 	var body fyne.CanvasObject
 	if u.success {
 		out := firstLineOfDetail(u.lastTest.Output)
@@ -505,7 +585,7 @@ func (u *appUI) showResult() {
 		body = items
 	}
 
-	retryBtn := widget.NewButton("Retry test", func() { u.runTestFlow() })
+	retryBtn := widget.NewButton("Retry test", u.runTestFlow)
 	instrBtn := widget.NewButton("Instructions again", u.showInstructions)
 	anotherBtn := widget.NewButton("Set up another key", func() { u.showForm() })
 	homeBtn := widget.NewButton("Home", u.showHome)
@@ -528,10 +608,23 @@ func (u *appUI) showResult() {
 	u.showScreen(container.NewPadded(container.NewVScroll(content)))
 }
 
+func (u *appUI) checkAgentFlow() {
+	u.runOp("Checking SSH agent...", func(ctx context.Context) {
+		u.lastGenResult = checkAgent(ctx, core.CheckAgentContext)
+	}, func() {
+		res := u.lastGenResult
+		if res.OK {
+			u.statusFlash(res.Message)
+		} else {
+			u.warn(res.Message)
+		}
+	})
+}
+
 // --- flows ---------------------------------------------------------------------------------------------
 
 func (u *appUI) subjectKey() string {
-	return u.selected
+	return keyForTest(u.selected, u.checkedKey)
 }
 
 func firstLineOfDetail(out string) string {
@@ -555,8 +648,10 @@ func (u *appUI) copyPubKey(keyName string) {
 		return
 	}
 	u.win.Clipboard().SetContent(pub)
-	u.store.CopiedKeys[keyName] = true
-	_ = u.store.Save()
+	if err := recordCopy(u.store, keyName); err != nil {
+		u.warn(err.Error())
+		return
+	}
 	u.statusFlash("Public key copied to clipboard")
 }
 
@@ -567,8 +662,9 @@ func (u *appUI) copyPubKeySilent() {
 	}
 	if pub := core.PublicKey(key); pub != "" {
 		u.win.Clipboard().SetContent(pub)
-		u.store.CopiedKeys[key] = true
-		_ = u.store.Save()
+		if err := recordCopy(u.store, key); err != nil {
+			u.warn(err.Error())
+		}
 	}
 }
 
@@ -578,12 +674,14 @@ func (u *appUI) addToAgentFlow(keyName string) {
 		return
 	}
 	u.runOp("Adding key to agent...", func(ctx context.Context) {
-		u.lastGenResult = core.AddToAgent(keyName)
+		u.lastGenResult = core.AddToAgentContext(ctx, keyName)
 	}, func() {
 		res := u.lastGenResult
 		if res.OK {
-			u.store.AgentLoadedKeys[keyName] = true
-			_ = u.store.Save()
+			if err := recordAgentLoad(u.store, keyName); err != nil {
+				u.warn(err.Error())
+				return
+			}
 			u.statusFlash(res.Message)
 		} else {
 			u.warn(res.Message)
@@ -598,12 +696,15 @@ func (u *appUI) deleteFlow(keyName string) {
 			if !ok {
 				return
 			}
-			_ = core.DeleteKey(keyName)
-			delete(u.store.UsedKeys, keyName)
-			delete(u.store.CopiedKeys, keyName)
-			delete(u.store.TestedKeysOK, keyName)
-			delete(u.store.AgentLoadedKeys, keyName)
-			_ = u.store.Save()
+			if err := deleteAndForget(keyName, core.DeleteKey, func(name string) error {
+				return forgetDeletedKeyStore(u.store, name)
+			}); err != nil {
+				u.warn(err.Error())
+				return
+			}
+			if u.selected == keyName {
+				u.selected = ""
+			}
 			u.statusFlash(fmt.Sprintf("Deleted '%s'", keyName))
 			u.showHome()
 		}, u.win).Show()
@@ -619,14 +720,22 @@ func (u *appUI) runTestFlow() {
 	if svc.ID == "" {
 		svc, _ = core.ServiceByID("github")
 	}
+	u.checkedKey = key
 	u.runOp("Testing connection to "+svc.Name+"...", func(ctx context.Context) {
-		r := core.TestService(svc, key)
-		u.lastTestResults = []core.HostResult{r}
+		u.lastTestResults = []core.HostResult{core.TestServiceContext(ctx, svc, key)}
 	}, func() {
 		u.lastTest = u.lastTestResults[0]
 		u.success = u.lastTest.OK
-		u.store.TestedKeysOK[key] = u.success
-		_ = u.store.Save()
+		if err := recordTest(u.store, key, u.success); err != nil {
+			u.warn(err.Error())
+			return
+		}
+		if u.success {
+			if err := recordServiceUse(u.store, key); err != nil {
+				u.warn(err.Error())
+				return
+			}
+		}
 		fyne.Do(func() { u.showResult() })
 	})
 }

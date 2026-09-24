@@ -157,6 +157,7 @@ func (m model) viewHome() string {
 		"Set up a new SSH key",
 		"Manage existing keys",
 		"Test a connection to a Git service",
+		"Check SSH agent",
 	}
 	var b strings.Builder
 	b.WriteString("\n")
@@ -165,7 +166,7 @@ func (m model) viewHome() string {
 		b.WriteString(actionButton(fmt.Sprintf("%d  %s", i+1, label), m.menuIdx == i))
 		b.WriteString("\n\n")
 	}
-	b.WriteString("\n  " + keycap("↑↓") + " move   " + keycap("1-3") + " jump   " + keycap("enter") + " choose   " + keycap("q") + " quit")
+	b.WriteString("\n  " + keycap("↑↓") + " move   " + keycap("1-4") + " jump   " + keycap("enter") + " choose   " + keycap("q") + " quit")
 	return b.String()
 }
 
@@ -184,9 +185,11 @@ func (m model) viewForm() string {
 		}
 	}
 
-	echo := "••••••"
-	if m.showPass {
-		echo = "(shown)"
+	passEcho := m.pass.View()
+	confirmEcho := m.confirm.View()
+	if !m.showPass {
+		passEcho = "••••••"
+		confirmEcho = "••••••"
 	}
 
 	focusMark := func(pos int) string {
@@ -216,9 +219,9 @@ func (m model) viewForm() string {
 	b.WriteString("\n")
 	b.WriteString(focusMark(fComment) + label("Comment") + m.comment.View())
 	b.WriteString("\n")
-	b.WriteString(focusMark(fPass) + label("Passphrase") + "[" + echo + "]  " + styleSubtitle.Render("(optional)"))
+	b.WriteString(focusMark(fPass) + label("Passphrase") + "[" + passEcho + "]  " + styleSubtitle.Render("(optional)"))
 	b.WriteString("\n")
-	b.WriteString(focusMark(fConfirm) + label("Confirm") + "[" + echo + "]")
+	b.WriteString(focusMark(fConfirm) + label("Confirm") + "[" + confirmEcho + "]")
 	b.WriteString("\n\n")
 	b.WriteString(check(m.showPass, fShow, "show passphrases"))
 	b.WriteString("\n")
@@ -262,7 +265,7 @@ func (m model) viewBrowser() string {
 	if m.browserPick {
 		b.WriteString(keycap("enter") + " test this key   " + keycap("esc") + " back")
 	} else {
-		b.WriteString(keycap("enter") + " connect to a service   " + keycap("d d") + " delete   " + keycap("esc") + " back")
+		b.WriteString(keycap("enter") + " connect to a service   " + keycap("c") + " copy   " + keycap("a") + " add to agent   " + keycap("d d") + " delete   " + keycap("esc") + " back")
 	}
 	return b.String()
 }

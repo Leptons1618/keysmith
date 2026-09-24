@@ -1,91 +1,228 @@
 #!/usr/bin/env node
 // Launcher for the keysmith npm package. Downloads the platform binary
-// from GitHub Releases on first use, caches it, and execs it.
+// from GitHub Releases on first use, caches it, and runs it.
 "use strict";
 
-const { spawnSync } = require("child_process");
-const fs = require("fs");
-const https = require("https");
-const os = require("os");
-const path = require("path");
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const https = require("node:https");
+const os = require("node:os");
+const path = require("node:path");
 
 const REPO = "Leptons1618/keysmith";
 const { version } = require(path.join(__dirname, "..", "package.json"));
 const TAG = `v${version}`;
 
-function platformTriple() {
-  const plat = { darwin: "darwin", linux: "linux", win32: "windows" }[process.platform];
-  const arch = { x64: "amd64", arm64: "arm64" }[process.arch];
-  if (!plat || !arch) {
-    fail(`No prebuilt binary for ${process.platform}/${process.arch}.`);
+const GUI_ASSETS = new Set([
+  "darwin/arm64",
+  "linux/amd64",
+  "windows/amd64",
+]);
+const TUI_ASSETS = new Set([
+  "darwin/amd64",
+  "darwin/arm64",
+  "linux/amd64",
+  "linux/arm64",
+  "windows/amd64",
+  "windows/arm64",
+]);
+
+function assetFor(nodePlatform, nodeArch, mode) {
+  const platform = { darwin: "darwin", linux: "linux", win32: "windows" }[nodePlatform];
+  const architecture = { x64: "amd64", arm64: "arm64" }[nodeArch];
+  const frontend = mode === "gui" ? "desktop GUI" : "terminal UI";
+  if (!platform || !architecture) {
+    throw new Error(`${frontend} is not released for ${nodePlatform}/${nodeArch}`);
   }
-  return { plat, arch };
+
+  const key = `${platform}/${architecture}`;
+  const available = mode === "gui" ? GUI_ASSETS : TUI_ASSETS;
+  if (!available.has(key)) {
+    throw new Error(`${frontend} is not released for ${nodePlatform}/${nodeArch}`);
+  }
+
+  const extension = platform === "windows" ? ".exe" : "";
+  const kind = mode === "tui" ? "-tui" : "";
+  return {
+    platform,
+    architecture,
+    name: `keysmith${kind}-${TAG}-${platform}-${architecture}${extension}`,
+  };
 }
 
-function wantsTUI() {
-  if (process.env.KEYSMITH_TUI === "1") return true;
-  if (path.basename(process.argv[1] || "") === "keysmith-tui") return true;
-  // The binary understands --tui/--gui itself; peek so we fetch the right one.
-  return process.argv.slice(2).includes("--tui");
+function parseBooleanOption(argument, name) {
+  if (argument === name) return true;
+  const prefix = `${name}=`;
+  if (!argument.startsWith(prefix)) return undefined;
+  const value = argument.slice(prefix.length);
+  if (value !== "true" && value !== "false") {
+    throw new Error(`${name}=${value} must be true or false`);
+  }
+  return value === "true";
 }
 
-function targetPath(plat, arch, tui) {
-  const ext = plat === "windows" ? ".exe" : "";
-  const kind = tui ? "-tui" : "";
-  const name = `keysmith${kind}-${TAG}-${plat}-${arch}${ext}`;
+function isTUIInvocation(invocation) {
+  const name = path.basename(invocation || "").toLowerCase();
+  return /^keysmith-tui(?:\.cmd|\.exe|\.ps1)?$/.test(name);
+}
+
+function parseLauncherArgs(args, options = {}) {
+  const invocation = options.invocation ?? process.argv[1] ?? "";
+  const env = options.env ?? process.env;
+  let tui;
+  let gui;
+  let versionOnly = false;
+
+  for (const argument of args) {
+    if (argument === "--" || !argument.startsWith("-")) break;
+    if (argument === "-h" || argument === "--help") break;
+    if (argument === "-v" || argument === "--version") {
+      versionOnly = true;
+      continue;
+    }
+    const parsedVersion = parseBooleanOption(argument, "--version");
+    if (parsedVersion !== undefined) {
+      versionOnly = parsedVersion;
+      continue;
+    }
+    const parsedTUI = parseBooleanOption(argument, "--tui");
+    if (parsedTUI !== undefined) {
+      tui = parsedTUI;
+      continue;
+    }
+    const parsedGUI = parseBooleanOption(argument, "--gui");
+    if (parsedGUI !== undefined) {
+      gui = parsedGUI;
+    }
+  }
+
+  if (tui === true && gui === true) {
+    throw new Error("--gui and --tui cannot be used together");
+  }
+
+  let mode;
+  if (tui !== undefined) {
+    mode = tui ? "tui" : "gui";
+  } else if (gui !== undefined) {
+    mode = gui ? "gui" : "tui";
+  } else if (env.KEYSMITH_TUI === "1" || isTUIInvocation(invocation)) {
+    mode = "tui";
+  } else {
+    mode = "gui";
+  }
+
+  const forwarded = versionOnly ? args : mode === "tui" && tui === undefined ? ["--tui", ...args] : args;
+  return { mode, args: forwarded, versionOnly };
+}
+
+function cacheTarget(asset) {
   const cache = path.join(os.homedir(), ".cache", "keysmith", TAG);
-  return { cache, file: path.join(cache, name), name };
+  return { cache, file: path.join(cache, asset.name) };
 }
 
-function download(url, redirects) {
+function writeBinaryAtomically(file, data, mode) {
+  const directory = path.dirname(file);
+  const temporary = path.join(
+    directory,
+    `.${path.basename(file)}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`,
+  );
+  let descriptor;
+  try {
+    descriptor = fs.openSync(temporary, "wx", mode);
+    fs.writeFileSync(descriptor, data);
+    fs.fchmodSync(descriptor, mode);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {
+      // Preserve the original cache write error.
+    }
+    throw error;
+  }
+}
+
+function download(url, redirects = 0) {
   return new Promise((resolve, reject) => {
-    if ((redirects || 0) > 5) return reject(new Error("too many redirects"));
-    https.get(url, { headers: { "user-agent": `${REPO} npm launcher` } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        return resolve(download(res.headers.location, (redirects || 0) + 1));
+    if (redirects > 5) return reject(new Error("too many redirects"));
+    https.get(url, { headers: { "user-agent": `${REPO} npm launcher` } }, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        return resolve(download(response.headers.location, redirects + 1));
       }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+      if (response.statusCode !== 200) {
+        response.resume();
+        return reject(new Error(`HTTP ${response.statusCode} for ${url}`));
       }
       const chunks = [];
-      res.on("data", (c) => chunks.push(c));
-      res.on("end", () => resolve(Buffer.concat(chunks)));
-      res.on("error", reject);
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve(Buffer.concat(chunks)));
+      response.on("error", reject);
     }).on("error", reject);
   });
 }
 
-function fail(msg) {
-  console.error(`keysmith: ${msg}`);
+function fail(message) {
+  console.error(`keysmith: ${message}`);
   console.error(`Binaries: https://github.com/${REPO}/releases`);
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 async function main() {
-  const tui = wantsTUI();
-  const { plat, arch } = platformTriple();
-  const { cache, file, name } = targetPath(plat, arch, tui);
-  const url =
-    `https://github.com/${REPO}/releases/download/${TAG}/${name}`;
-
-  fs.mkdirSync(cache, { recursive: true });
-  if (!fs.existsSync(file)) {
-    process.stderr.write(`Fetching ${name} ...\n`);
-    let buf;
-    try {
-      buf = await download(url, 0);
-    } catch (err) {
-      fail(`download failed: ${err.message}`);
-    }
-    fs.writeFileSync(file, buf);
-    if (plat !== "windows") fs.chmodSync(file, 0o755);
+  let selection;
+  try {
+    selection = parseLauncherArgs(process.argv.slice(2));
+  } catch (error) {
+    fail(error.message);
+    return;
   }
 
-  const done = spawnSync(file, process.argv.slice(2), { stdio: "inherit" });
-  if (done.error) fail(`could not run ${file}: ${done.error.message}`);
-  process.exit(done.status ?? 1);
+  if (selection.versionOnly) {
+    console.log(`keysmith ${version}`);
+    return;
+  }
+
+  let asset;
+  let target;
+  try {
+    asset = assetFor(process.platform, process.arch, selection.mode);
+    target = cacheTarget(asset);
+  } catch (error) {
+    fail(error.message);
+    return;
+  }
+
+  fs.mkdirSync(target.cache, { recursive: true });
+  if (!fs.existsSync(target.file)) {
+    const url = `https://github.com/${REPO}/releases/download/${TAG}/${asset.name}`;
+    process.stderr.write(`Fetching ${asset.name} ...\n`);
+    try {
+      const contents = await download(url);
+      writeBinaryAtomically(target.file, contents, asset.platform === "windows" ? 0o666 : 0o755);
+    } catch (error) {
+      fail(`download failed: ${error.message}`);
+      return;
+    }
+  }
+
+  const result = spawnSync(target.file, selection.args, { stdio: "inherit" });
+  if (result.error) {
+    fail(`could not run ${target.file}: ${result.error.message}`);
+    return;
+  }
+  process.exitCode = result.status ?? 1;
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = {
+  TAG,
+  assetFor,
+  cacheTarget,
+  parseLauncherArgs,
+  writeBinaryAtomically,
+};

@@ -53,28 +53,25 @@ func TestStoreCorruptFileTolerated(t *testing.T) {
 	}
 }
 
-func TestStoreSchemaMatchesPython(t *testing.T) {
+func TestStoreSchemaMatchesExistingJSON(t *testing.T) {
 	withTempHOME(t)
 
-	// Write exactly what the Python app writes.
-	py := `{
+	existing := `{
   "used_keys": ["alpha"],
   "copied_keys": ["alpha", "beta"],
   "tested_keys_ok": {"alpha": true},
   "agent_loaded_keys": []
 }`
-	if err := os.WriteFile(StateFilePath(), []byte(py), 0o600); err != nil {
+	if err := os.WriteFile(StateFilePath(), []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	s := LoadStore()
 	if !s.UsedKeys["alpha"] || !s.CopiedKeys["beta"] || !s.TestedKeysOK["alpha"] {
-		t.Errorf("python schema not understood: %+v", s)
+		t.Errorf("existing schema not understood: %+v", s)
 	}
 
-	// And the Go write must be readable as the same schema.
-	s.UsedKeys["gamma"] = true
-	if err := s.Save(); err != nil {
+	if err := s.MarkCopied("gamma"); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(StateFilePath())
@@ -82,5 +79,29 @@ func TestStoreSchemaMatchesPython(t *testing.T) {
 		if !contains(string(data), key) {
 			t.Errorf("saved schema missing %s", key)
 		}
+	}
+}
+
+func TestStoreTransitionsPersistAndForget(t *testing.T) {
+	withTempHOME(t)
+	s := LoadStore()
+	if err := s.MarkCopied("alpha"); err != nil {
+		t.Fatalf("MarkCopied: %v", err)
+	}
+	if err := s.MarkAgentLoaded("alpha"); err != nil {
+		t.Fatalf("MarkAgentLoaded: %v", err)
+	}
+	if err := s.RecordTest("alpha", true); err != nil {
+		t.Fatalf("RecordTest: %v", err)
+	}
+	if err := s.MarkUsed("alpha"); err != nil {
+		t.Fatalf("MarkUsed: %v", err)
+	}
+	if err := s.ForgetKey("alpha"); err != nil {
+		t.Fatalf("ForgetKey: %v", err)
+	}
+	loaded := LoadStore()
+	if loaded.CopiedKeys["alpha"] || loaded.AgentLoadedKeys["alpha"] || loaded.TestedKeysOK["alpha"] || loaded.UsedKeys["alpha"] {
+		t.Fatalf("deleted key remained in state: %+v", loaded)
 	}
 }

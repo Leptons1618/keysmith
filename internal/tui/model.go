@@ -39,6 +39,7 @@ type opKind int
 const (
 	opGenerate opKind = iota
 	opAddAgent
+	opCheckAgent
 	opTest
 )
 
@@ -46,10 +47,11 @@ type model struct {
 	screen screen
 	nav    []screen // back stack for esc
 
-	keys     []core.KeyInfo
-	store    *core.Store
-	selected string // key under cursor in browser / subject of result
-	newKey   string // freshly generated key (highlight target)
+	keys             []core.KeyInfo
+	store            *core.Store
+	selected         string // key under cursor in browser / subject of result
+	newKey           string // freshly generated key (highlight target)
+	confirmDeleteKey string
 
 	algoIdx  int
 	name     textinput.Model
@@ -75,6 +77,7 @@ type model struct {
 	busy     bool
 	busyMsg  string
 	cancelCh chan struct{}
+	opID     uint64
 	spinner  spinner.Model
 
 	status string
@@ -120,12 +123,12 @@ func (m *model) push(s screen) {
 
 func (m *model) gotoScreen(s screen) {
 	m.screen = s
-	m.menuIdx = 0
-	m.errMsg = ""
-	switch s {
-	case scrBrowser:
-		m.loadKeys()
-	case scrService, scrInstructions:
+	if s == scrHome {
+		m.browserPick = false
+		m.newKey = ""
+		m.svc = core.Service{}
+		m.lastTest = core.HostResult{}
+		m.success = false
 	}
 }
 
@@ -140,6 +143,9 @@ func (m *model) back() {
 	m.errMsg = ""
 	m.screen = prev
 	m.menuIdx = 0
+	if prev == scrHome {
+		m.browserPick = false
+	}
 	if prev == scrBrowser {
 		m.loadKeys()
 	}
@@ -190,6 +196,7 @@ func clearConfirmLater() tea.Cmd {
 }
 
 func (m *model) setStatus(s string) {
+	m.errMsg = ""
 	m.status = s
 }
 

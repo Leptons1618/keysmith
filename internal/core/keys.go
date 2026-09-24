@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,8 +23,10 @@ func SSHDir() string {
 var keyNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // ValidKeyName reports whether name may be used as an ssh-keygen file name.
+// Dot path components are rejected because filepath.Join resolves them as
+// directory aliases rather than file names.
 func ValidKeyName(name string) bool {
-	return keyNameRe.MatchString(name)
+	return name != "." && name != ".." && keyNameRe.MatchString(name)
 }
 
 // ListKeys scans ~/.ssh/*.pub and keeps pairs whose private file exists,
@@ -76,11 +79,13 @@ func lower(s string) string {
 	return string(b)
 }
 
-// GenerateKey runs ssh-keygen. force deletes an existing pair first.
-// Note: like the original implementation, the passphrase is passed via argv
-// (-N) and is briefly visible in the process list; parity was chosen over a
-// rework so both versions behave identically during migration.
+// GenerateKey runs ssh-keygen synchronously for non-interactive callers.
 func GenerateKey(algo KeyAlgorithm, keyName, comment, passphrase string, force bool) Result {
+	return GenerateKeyContext(context.Background(), algo, keyName, comment, passphrase, force)
+}
+
+// GenerateKeyContext runs ssh-keygen and stops it when ctx is cancelled.
+func GenerateKeyContext(ctx context.Context, algo KeyAlgorithm, keyName, comment, passphrase string, force bool) Result {
 	switch algo {
 	case AlgoEd25519, AlgoRSA, AlgoECDSA:
 	default:
@@ -91,13 +96,19 @@ func GenerateKey(algo KeyAlgorithm, keyName, comment, passphrase string, force b
 	}
 
 	dir := SSHDir()
-	_ = os.MkdirAll(dir, 0o700)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Result{Message: "Key generation failed: could not create ~/.ssh: " + trimSpace(err.Error())}
+	}
 	keyPath := filepath.Join(dir, keyName)
 	pubPath := keyPath + ".pub"
 
 	if force {
-		_ = os.Remove(keyPath)
-		_ = os.Remove(pubPath)
+		if err := removeIfExists(keyPath); err != nil {
+			return Result{Message: "Key generation failed: could not replace private key: " + trimSpace(err.Error())}
+		}
+		if err := removeIfExists(pubPath); err != nil {
+			return Result{Message: "Key generation failed: could not replace public key: " + trimSpace(err.Error())}
+		}
 	}
 
 	args := []string{"-t", string(algo), "-f", keyPath, "-N", passphrase}
@@ -108,16 +119,19 @@ func GenerateKey(algo KeyAlgorithm, keyName, comment, passphrase string, force b
 		args = append(args, "-C", comment)
 	}
 
-	out, err := runCmd(runTool("ssh-keygen", args...))
+	out, err := runCmd(runToolContext(ctx, "ssh-keygen", args...))
 	if err != nil {
+		if ctx.Err() != nil {
+			return Result{Message: "Key generation cancelled."}
+		}
 		return Result{Message: fmt.Sprintf("Key generation failed: %s", out)}
 	}
 	return Result{OK: true, Message: fmt.Sprintf("Key '%s' generated successfully.", keyName)}
 }
 
-// PublicKey loads the public key text for keyName, or "" when missing.
+// PublicKey loads the public key text for keyName, or "" when missing or invalid.
 func PublicKey(keyName string) string {
-	if keyName == "" {
+	if !ValidKeyName(keyName) {
 		return ""
 	}
 	data, err := os.ReadFile(filepath.Join(SSHDir(), keyName+".pub"))
@@ -129,6 +143,9 @@ func PublicKey(keyName string) string {
 
 // Fingerprint returns the ssh-keygen -lf fingerprint line, or "".
 func Fingerprint(keyName string) string {
+	if !ValidKeyName(keyName) {
+		return ""
+	}
 	pubPath := filepath.Join(SSHDir(), keyName+".pub")
 	if _, err := os.Stat(pubPath); err != nil {
 		return ""
@@ -142,13 +159,30 @@ func Fingerprint(keyName string) string {
 
 // PrivateKeyPath is the private key path for keyName under ~/.ssh.
 func PrivateKeyPath(keyName string) string {
+	if !ValidKeyName(keyName) {
+		return ""
+	}
 	return filepath.Join(SSHDir(), keyName)
 }
 
-// DeleteKey removes both key files from ~/.ssh.
+// DeleteKey removes both key files from ~/.ssh. Missing files are treated as
+// already deleted, while permission and other filesystem failures are returned.
 func DeleteKey(keyName string) error {
-	_ = os.Remove(PrivateKeyPath(keyName))
-	return os.Remove(PrivateKeyPath(keyName) + ".pub")
+	if !ValidKeyName(keyName) {
+		return ErrInvalidKeyName
+	}
+	if err := removeIfExists(PrivateKeyPath(keyName)); err != nil {
+		return err
+	}
+	return removeIfExists(PrivateKeyPath(keyName) + ".pub")
+}
+
+func removeIfExists(path string) error {
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 // runTool builds a command for an external OpenSSH tool (ssh, ssh-add,
@@ -156,6 +190,13 @@ func DeleteKey(keyName string) error {
 // PATH-shim scripts are not executable on Windows, so tests swap runTool
 // itself instead.
 var runTool = exec.Command
+
+// runToolContext is the cancellable command seam used by interactive
+// operations. It remains separate so existing synchronous tests can keep their
+// small fake-tool seam.
+var runToolContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, name, args...)
+}
 
 // runCmd captures combined output and normalizes CRLF on Windows.
 func runCmd(cmd *exec.Cmd) (string, error) {

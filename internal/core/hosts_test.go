@@ -1,8 +1,13 @@
 package core
 
 import (
+	"context"
+	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 var gh = func() Service { s, _ := ServiceByID("github"); return s }()
@@ -55,14 +60,37 @@ func TestTestServiceGitLabSuccessWording(t *testing.T) {
 	})
 	defer restore()
 
-	// GitLab's banner lacks both magic phrases; accept via generic wording.
-	// The current sniffer requires them, so this asserts documented behavior:
-	// GitLab success text must contain 'successfully authenticated' or
-	// 'authenticated ... shell access' — otherwise we report failure honestly.
 	r := TestService(gl, "")
-	if r.OK {
-		t.Skip("sniffer accepted gitlab banner")
+	if !r.OK {
+		t.Errorf("expected GitLab success, got %+v", r)
 	}
+}
+
+func TestTestServiceContextCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("blocking helper uses a POSIX process")
+	}
+	orig := runToolContext
+	runToolContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestBlockingHelperProcess", "--")
+		cmd.Env = append(os.Environ(), "KEYSMITH_BLOCKING_HELPER=1")
+		return cmd
+	}
+	defer func() { runToolContext = orig }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	r := TestServiceContext(ctx, gh, "")
+	if r.OK || !strings.Contains(strings.ToLower(r.Output), "deadline") {
+		t.Errorf("expected cancellation output, got %+v", r)
+	}
+}
+
+func TestBlockingHelperProcess(t *testing.T) {
+	if os.Getenv("KEYSMITH_BLOCKING_HELPER") != "1" {
+		t.Skip("helper only")
+	}
+	time.Sleep(time.Second)
 }
 
 func TestTestServiceFallbackTo443(t *testing.T) {

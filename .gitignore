@@ -1,21 +1,18 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
 
-# Virtual environments
-.venv/
-venv/
-ENV/
-.egg-info/
+# Go build output
+/keysmith
+/keysmith.exe
 
-# Project venv folder (local)
-.ssh-key-gui/
-
-# PyInstaller
-build/
-dist/
-*.spec
+# npm packaging (release staging only)
+/pkg/
+/out/
+*.tgz
 
 # Logs
 *.log

@@ -25,7 +25,7 @@ func (m model) copyPubKey(keyName string) (tea.Model, tea.Cmd) {
 	}
 	tool, args := clipboardCmd()
 	if tool == "" {
-		m.setError("No clipboard tool found (install xclip or wl-copy).")
+		m.setError("No clipboard tool found (install xclip, wl-copy, or xsel).")
 		return m, clearErrLater()
 	}
 	cmd := exec.Command(tool, args...)
@@ -34,8 +34,10 @@ func (m model) copyPubKey(keyName string) (tea.Model, tea.Cmd) {
 		m.setError(fmt.Sprintf("Clipboard write failed: %v", err))
 		return m, clearErrLater()
 	}
-	m.store.CopiedKeys[keyName] = true
-	_ = m.store.Save()
+	if err := m.store.MarkCopied(keyName); err != nil {
+		m.setError("Public key copied, but saving key state failed: " + err.Error())
+		return m, clearErrLater()
+	}
 	m.setStatus("Public key copied to clipboard")
 	return m, nil
 }
@@ -46,8 +48,15 @@ func (m model) copyPubKeySilent() (tea.Model, tea.Cmd) {
 }
 
 func clipboardCmd() (string, []string) {
-	if runtime.GOOS == "darwin" {
+	return clipboardCommand(runtime.GOOS)
+}
+
+func clipboardCommand(goos string) (string, []string) {
+	if goos == "darwin" {
 		return "pbcopy", nil
+	}
+	if goos == "windows" {
+		return "clip.exe", nil
 	}
 	for _, c := range []struct {
 		bin  string
@@ -70,8 +79,7 @@ func (m model) addToAgent(keyName string) (tea.Model, tea.Cmd) {
 		return m, clearErrLater()
 	}
 	return m.startOp(opAddAgent, func(ctx context.Context) (core.Result, []core.HostResult) {
-		_ = ctx
-		return core.AddToAgent(keyName), nil
+		return core.AddToAgentContext(ctx, keyName), nil
 	}, "Adding key to SSH agent...")
 }
 
@@ -83,19 +91,23 @@ func (m model) deleteSelected() (tea.Model, tea.Cmd) {
 		m.setError("Select a key first.")
 		return m, clearErrLater()
 	}
-	if !m.confirmDelete {
+	if !m.confirmDelete || m.confirmDeleteKey != key {
 		m.confirmDelete = true
+		m.confirmDeleteKey = key
 		m.setError(fmt.Sprintf("Press d again to delete '%s'", key))
 		return m, clearConfirmLater()
 	}
 	m.confirmDelete = false
+	m.confirmDeleteKey = ""
 
-	_ = core.DeleteKey(key)
-	delete(m.store.UsedKeys, key)
-	delete(m.store.CopiedKeys, key)
-	delete(m.store.TestedKeysOK, key)
-	delete(m.store.AgentLoadedKeys, key)
-	_ = m.store.Save()
+	if err := core.DeleteKey(key); err != nil {
+		m.setError(fmt.Sprintf("Could not delete '%s': %v", key, err))
+		return m, clearErrLater()
+	}
+	if err := m.store.ForgetKey(key); err != nil {
+		m.setError(fmt.Sprintf("Deleted '%s', but saving key state failed: %v", key, err))
+		return m, clearErrLater()
+	}
 	if m.selected == key {
 		m.selected = ""
 	}
@@ -115,8 +127,7 @@ func (m model) runTest() (tea.Model, tea.Cmd) {
 		svc, _ = core.ServiceByID("github")
 	}
 	return m.startOp(opTest, func(ctx context.Context) (core.Result, []core.HostResult) {
-		_ = ctx
-		r := core.TestService(svc, key)
+		r := core.TestServiceContext(ctx, svc, key)
 		return core.Result{}, []core.HostResult{r}
 	}, "Testing connection to "+svc.Name+"...")
 }

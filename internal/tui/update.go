@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"keysmith/internal/core"
 )
 
 type opDoneMsg struct {
+	opID    uint64
 	kind    opKind
 	res     core.Result
 	results []core.HostResult // opTest carries exactly one
@@ -24,14 +26,12 @@ const errTimeout = 4 * time.Second
 func (m model) Init() tea.Cmd {
 	return nil
 }
-
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-
 	case spinner.TickMsg:
 		if m.busy {
 			var cmd tea.Cmd
@@ -39,21 +39,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
-
 	case clearErrMsg:
 		m.errMsg = ""
 		return m, nil
-
 	case clearConfirmMsg:
 		m.confirmDelete = false
+		m.confirmDeleteKey = ""
 		if strings.HasPrefix(m.errMsg, "Press d again") {
 			m.errMsg = ""
 		}
 		return m, nil
-
 	case opDoneMsg:
-		return m.finishOp(msg), nil
-
+		if m.busy && msg.opID == m.opID {
+			return m.finishOp(msg), nil
+		}
+		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -110,18 +110,20 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateHome(key string) (tea.Model, tea.Cmd) {
 	switch key {
+	case "q":
+		return m, tea.Quit
 	case "up", "k":
 		if m.menuIdx > 0 {
 			m.menuIdx--
 		}
 	case "down", "j":
-		if m.menuIdx < 2 {
+		if m.menuIdx < 3 {
 			m.menuIdx++
 		}
-	case "1", "2", "3":
+	case "1", "2", "3", "4":
 		m.menuIdx = int(key[0] - '1')
 	}
-	if key == "1" || key == "2" || key == "3" || key == "enter" {
+	if key == "1" || key == "2" || key == "3" || key == "4" || key == "enter" {
 		return m.homeAction()
 	}
 	return m, nil
@@ -130,9 +132,11 @@ func (m model) updateHome(key string) (tea.Model, tea.Cmd) {
 func (m model) homeAction() (tea.Model, tea.Cmd) {
 	switch m.menuIdx {
 	case 0:
+		m.resetForm()
 		m.push(scrForm)
 		m.focusFirstFormField()
 	case 1:
+		m.browserPick = false
 		m.push(scrBrowser)
 		if len(m.keys) == 0 {
 			m.setError("No keys yet. Choose \"Set up a new SSH key\" first.")
@@ -140,8 +144,24 @@ func (m model) homeAction() (tea.Model, tea.Cmd) {
 	case 2:
 		m.browserPick = true
 		m.push(scrBrowser)
+	case 3:
+		return m.startOp(opCheckAgent, func(ctx context.Context) (core.Result, []core.HostResult) {
+			return core.CheckAgentContext(ctx), nil
+		}, "Checking SSH agent...")
 	}
 	return m, nil
+}
+
+func (m *model) resetForm() {
+	m.name.SetValue("id_ed25519")
+	m.comment.SetValue("")
+	m.pass.SetValue("")
+	m.confirm.SetValue("")
+	m.pass.EchoMode = textinput.EchoPassword
+	m.confirm.EchoMode = textinput.EchoPassword
+	m.algoIdx = 0
+	m.showPass = false
+	m.force = false
 }
 
 // --- FORM -------------------------------------------------------------
@@ -208,6 +228,13 @@ func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fShow:
 		if isKey && key.String() == " " {
 			m.showPass = !m.showPass
+			if m.showPass {
+				m.pass.EchoMode = textinput.EchoNormal
+				m.confirm.EchoMode = textinput.EchoNormal
+			} else {
+				m.pass.EchoMode = textinput.EchoPassword
+				m.confirm.EchoMode = textinput.EchoPassword
+			}
 		}
 	case fForce:
 		if isKey && key.String() == " " {
@@ -253,8 +280,7 @@ func (m model) submitGenerate() (tea.Model, tea.Cmd) {
 	force := m.force
 
 	return m.startOp(opGenerate, func(ctx context.Context) (core.Result, []core.HostResult) {
-		_ = ctx
-		return core.GenerateKey(algo, name, comment, pass, force), nil
+		return core.GenerateKeyContext(ctx, algo, name, comment, pass, force), nil
 	}, "Generating your key...")
 }
 
@@ -284,18 +310,16 @@ func (m model) updateBrowser(key string) (tea.Model, tea.Cmd) {
 			m.push(scrService)
 			return m, nil
 		}
-		return m.openActionsMenu()
+		m.push(scrService)
+		return m, nil
 	case "d":
 		return m.deleteSelected()
 	}
 	return m, nil
 }
 
-// openActionsMenu shows the action list for the selected key inline by
-// switching menu semantics: reuse service-style numbered choice via a
-// dedicated small overlay rendered inside the browser view.
 func (m model) openActionsMenu() (tea.Model, tea.Cmd) {
-	// Actions are handled directly by keys in the browser footer.
+	m.push(scrService)
 	return m, nil
 }
 
@@ -355,12 +379,18 @@ func (m model) updateInstructions(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "o":
 		openInBrowser(m.svc.KeysURL)
-		m.setStatus("Opened " + m.svc.Name + " in your browser. The public key was copied to your clipboard.")
 		return m.copyPubKeySilent()
 	case "t":
 		return m.runTest()
 	case "c":
 		return m.copyPubKey(m.subjectKey())
+	case "u":
+		if err := m.store.MarkUsed(m.subjectKey()); err != nil {
+			m.setError("Could not save service workflow state: " + err.Error())
+			return m, clearErrLater()
+		}
+		m.setStatus("Marked key as added to " + m.svc.Name + ".")
+		return m, nil
 	}
 	return m, nil
 }
@@ -375,6 +405,7 @@ func (m model) updateResult(key string) (tea.Model, tea.Cmd) {
 		m.push(scrInstructions)
 	case "n":
 		m.newKey = ""
+		m.resetForm()
 		m.push(scrForm)
 		m.focusFirstFormField()
 	case "h", "q":
@@ -386,11 +417,9 @@ func (m model) updateResult(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// subjectKey is the key the current flow operates on.
+// subjectKey is the key the current flow operates on. A later browser
+// selection always supersedes the generated-key highlight.
 func (m model) subjectKey() string {
-	if m.newKey != "" {
-		return m.newKey
-	}
 	return m.selected
 }
 
@@ -404,6 +433,8 @@ func (m model) startOp(kind opKind, fn func(ctx context.Context) (core.Result, [
 	m.busy = true
 	m.busyMsg = busyMsg
 	m.cancelCh = ch
+	m.opID++
+	opID := m.opID
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
@@ -421,7 +452,7 @@ func (m model) startOp(kind opKind, fn func(ctx context.Context) (core.Result, [
 		case <-ch:
 			return
 		case out := <-done:
-			completions <- opDoneMsg{kind: kind, res: out.res, results: out.results}
+			completions <- opDoneMsg{opID: opID, kind: kind, res: out.res, results: out.results}
 		}
 	}()
 	return m, tea.Batch(m.spinner.Tick, awaitCompletion())
@@ -443,6 +474,9 @@ func awaitCompletion() tea.Cmd {
 }
 
 func (m model) finishOp(msg opDoneMsg) model {
+	if !m.busy || msg.opID != m.opID {
+		return m
+	}
 	m.busy = false
 	m.cancelCh = nil
 	switch msg.kind {
@@ -463,18 +497,31 @@ func (m model) finishOp(msg opDoneMsg) model {
 	case opAddAgent:
 		if msg.res.OK {
 			key := m.subjectKey()
-			m.store.AgentLoadedKeys[key] = true
-			_ = m.store.Save()
+			if err := m.store.MarkAgentLoaded(key); err != nil {
+				m.setError("Key added to agent, but saving key state failed: " + err.Error())
+			} else {
+				m.setStatus(msg.res.Message)
+			}
+		} else {
+			m.setError(msg.res.Message)
+		}
+	case opCheckAgent:
+		if msg.res.OK {
 			m.setStatus(msg.res.Message)
 		} else {
 			m.setError(msg.res.Message)
 		}
 	case opTest:
+		if len(msg.results) == 0 {
+			m.setError("Connection test returned no result.")
+			return m
+		}
 		m.lastTest = msg.results[0]
 		m.success = msg.results[0].OK
 		key := m.subjectKey()
-		m.store.TestedKeysOK[key] = m.success
-		_ = m.store.Save()
+		if err := m.store.RecordTest(key, m.success); err != nil {
+			m.setError("Test finished, but saving key state failed: " + err.Error())
+		}
 		if m.success {
 			m.gotoScreen(scrResult)
 			m.setStatus("Connected to " + m.svc.Name + "!")

@@ -1,6 +1,5 @@
-// Package core holds all SSH key management business logic.
-// It shells out to the OpenSSH tools (ssh-keygen, ssh-add, ssh) exactly like
-// the original Python implementation and must never import any UI package.
+// Package core owns all SSH key management business logic.
+// It shells out to the OpenSSH tools and must never import a UI package.
 package core
 
 import "errors"

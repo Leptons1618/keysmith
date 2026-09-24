@@ -2,29 +2,38 @@
 
 ## Development setup
 
-- Python 3.12+
+- Go 1.27+
+- OpenSSH tools available in `PATH`: `ssh`, `ssh-keygen`, and `ssh-add`
+- Linux GUI builds require the OpenGL/GLFW and Wayland development packages listed in `.github/workflows/ci.yml`
 
-Create a virtual environment and install dependencies:
+Install Go dependencies and run the focused checks:
 
-- `python -m venv .venv`
-- Activate it:
-  - Windows (PowerShell): `.\.venv\Scripts\Activate.ps1`
-  - macOS/Linux: `source .venv/bin/activate`
-- `pip install -r requirements.txt`
-- `pip install -r requirements-dev.txt`
+```sh
+go test -tags gui ./...
+go test -tags tui ./...
+go vet -tags gui ./...
+go vet -tags tui ./...
+node --test cmd/keysmith/launcher.test.js
+```
 
-## Linting
+Run the desktop GUI:
 
-Run:
+```sh
+go run ./cmd/keysmith
+```
 
-- `python -m pylint main.py ssh_utils.py`
+Run the terminal UI:
 
-## Running
+```sh
+go run -tags tui ./cmd/keysmith --tui
+```
 
-- `python main.py`
+The GUI and TUI are separate release binaries selected by build tags. Each binary accepts only its own frontend flag; use the npm `keysmith` or `keysmith-tui` command when you need automatic platform asset selection.
 
 ## Pull requests
 
 - Keep changes focused and small.
-- Prefer UI changes that maintain a clear, guided flow.
-- Avoid introducing platform-specific behavior unless necessary.
+- Prefer changes that preserve the shared `internal/core` workflow and keep GUI/TUI behavior aligned.
+- Add regression tests for behavior, boundaries, transitions, and errors.
+- Do not add a second key-management implementation or bypass `internal/core` from a frontend.
+- Avoid introducing platform-specific behavior unless the release matrix requires it.

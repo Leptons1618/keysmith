@@ -2,8 +2,15 @@
 
 package main
 
-import "keysmith/internal/gui"
+import (
+	"fmt"
 
-// runFrontend serves the desktop GUI: default builds link Fyne and need a
-// native (non-cross) toolchain. The tui flag is accepted but ignored.
-func runFrontend(bool) error { gui.Run(); return nil }
+	"keysmith/internal/gui"
+)
+
+func runFrontend(mode frontendMode) error {
+	if mode != guiMode {
+		return fmt.Errorf("this binary only supports the desktop GUI; use a TUI-tagged keysmith binary for --tui")
+	}
+	return gui.Run(version)
+}

@@ -3,41 +3,99 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
-      - 'v*.*.*-*'
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (e.g., v1.2.3). Required when manually dispatching."
+        description: "Existing release tag to publish (for example, v1.2.3)."
         required: true
         type: string
 
-permissions:
-  contents: write
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
-  validate:
+  quality:
+    name: quality gate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Validate tag
+      - name: Validate strict SemVer tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
-          if [ -z "${RELEASE_TAG}" ]; then
-            echo "No tag detected."
-            echo "- If you ran this manually: provide 'tag' input (e.g. v1.0.0)."
-            echo "- If you want automatic releases: push a tag (git tag v1.0.0 && git push origin v1.0.0)."
+          set -euo pipefail
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "${RELEASE_TAG}" =~ ${semver} ]]; then
+            echo "Tag '${RELEASE_TAG}' must be vMAJOR.MINOR.PATCH with an optional SemVer prerelease suffix." >&2
             exit 1
           fi
-          case "${RELEASE_TAG}" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "Tag '${RELEASE_TAG}' is not semver-like (expected vMAJOR.MINOR.PATCH)."; exit 1 ;;
-          esac
+
+          version="${RELEASE_TAG#v}"
+          prerelease="${version#*-}"
+          if [[ "${prerelease}" == "${version}" ]]; then
+            exit 0
+          fi
+          IFS='.' read -r -a identifiers <<< "${prerelease}"
+          for identifier in "${identifiers[@]}"; do
+            if [[ "${identifier}" =~ ^[0-9]+$ ]] && [[ "${identifier}" =~ ^0[0-9]+$ ]]; then
+              echo "Numeric prerelease identifiers must not contain leading zeroes: '${identifier}'." >&2
+              exit 1
+            fi
+          done
+
+      - name: Checkout exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Verify checked-out tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev xorg-dev xvfb \
+            libwayland-dev wayland-protocols libxkbcommon-dev
+
+      - name: Test GUI
+        shell: bash
+        run: xvfb-run -a go test -tags gui ./...
+
+      - name: Test TUI
+        shell: bash
+        run: go test -tags tui ./...
+
+      - name: Vet GUI
+        shell: bash
+        run: go vet -tags gui ./...
+
+      - name: Vet TUI
+        shell: bash
+        run: go vet -tags tui ./...
 
   gui-binaries:
-    name: GUI (${{ matrix.os }})
-    needs: validate
+    name: GUI (${{ matrix.platform }})
+    needs: quality
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -51,20 +109,24 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout
+      - name: Checkout exact release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
-      # Native build of the Fyne desktop frontend (default, untagged variant).
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
+      # Keep this package list aligned with the Linux quality gate.
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev xorg-dev xvfb \
+            libwayland-dev wayland-protocols libxkbcommon-dev
 
       - name: Build desktop GUI
         shell: bash
@@ -74,8 +136,10 @@ jobs:
           name="keysmith-${RELEASE_TAG}-${{ matrix.platform }}"
           ext=""
           [ "$(uname -s)" = "MINGW"* ] || [ "$(uname -s)" = "CYGWIN"* ] && ext=".exe"
-          go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
-            -o "out/${name}${ext}" ./cmd/keysmith
+          output="out/${name}${ext}"
+          go build -tags gui -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
+            -o "${output}" ./cmd/keysmith
+          test -s "${output}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -86,7 +150,9 @@ jobs:
 
   tui-binaries:
     name: TUI (${{ matrix.goos }}-${{ matrix.goarch }})
-    needs: validate
+    needs: quality
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -100,16 +166,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout exact release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      # The `tui` build tag excludes Fyne entirely, so these are pure Go and
-      # cross-compile anywhere without a C toolchain.
       - name: Cross-compile terminal UI
         shell: bash
         run: |
@@ -117,10 +183,11 @@ jobs:
           mkdir -p out
           ext=""
           [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
+          output="out/keysmith-tui-${RELEASE_TAG}-${{ matrix.goos }}-${{ matrix.goarch }}${ext}"
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
             go build -tags tui -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
-            -o "out/keysmith-tui-${RELEASE_TAG}-${{ matrix.goos }}-${{ matrix.goarch }}${ext}" \
-            ./cmd/keysmith
+            -o "${output}" ./cmd/keysmith
+          test -s "${output}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -131,45 +198,66 @@ jobs:
 
   npm-package:
     name: npm package
-    needs: validate
+    needs: quality
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
+      - name: Checkout exact release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
-      - name: Check npm credentials
-        id: auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "::warning::NPM_TOKEN secret is not set; skipping npm publish (package still attached to the Release)."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
 
       - name: Stage package
         shell: bash
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          mkdir -p pkg/bin
+          if [[ -e pkg || -e out ]]; then
+            echo "Refusing to overwrite existing package staging paths." >&2
+            exit 1
+          fi
+          mkdir -p pkg/bin out
           cp package.release.json pkg/package.json
           sed -i "s|0.0.0-PLACEHOLDER|${version}|g" pkg/package.json
-          for f in bin/keysmith*; do
-            [ -f "$f" ] && cp "$f" pkg/bin/
-          done
-          chmod +x pkg/bin/*
+          cp bin/keysmith.js pkg/bin/keysmith.js
+          chmod +x pkg/bin/keysmith.js
+          node - <<'NODE'
+          const expected = process.env.RELEASE_TAG.replace(/^v/, "");
+          const manifest = require("./pkg/package.json");
+          if (manifest.version !== expected) throw new Error("package version does not match the release tag");
+          if (JSON.stringify(manifest.files) !== JSON.stringify(["bin"])) throw new Error("unexpected package files field");
+          if (manifest.bin.keysmith !== "bin/keysmith.js") throw new Error("unexpected GUI bin mapping");
+          if (manifest.bin["keysmith-tui"] !== "bin/keysmith.js") throw new Error("unexpected TUI bin mapping");
+          NODE
 
-      - name: Pack tarball
-        working-directory: pkg
+      - name: Pack and inspect npm tarball
         shell: bash
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
-          set -euo pipefail
-          mkdir -p ../out
-          npm pack --pack-destination ../out
+          mkdir -p out
+          npm pack --pack-destination out
+          mapfile -d '' tarballs < <(find out -maxdepth 1 -type f -name '*.tgz' -print0)
+          test "${#tarballs[@]}" -eq 1
+          expected="keysmith-${RELEASE_TAG#v}.tgz"
+          test "${tarballs[0]}" = "out/${expected}"
+          expected_contents="$(mktemp)"
+          actual_contents="$(mktemp)"
+          trap 'rm -f "${expected_contents}" "${actual_contents}"' EXIT
+          printf '%s\n' \
+            'package/bin/keysmith.js' \
+            'package/package.json' | sort > "${expected_contents}"
+          tar -tzf "${tarballs[0]}" | sort > "${actual_contents}"
+          diff -u "${expected_contents}" "${actual_contents}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -178,23 +266,49 @@ jobs:
           path: out/*.tgz
           if-no-files-found: error
 
-      - name: Publish to npm
-        continue-on-error: true
-        if: steps.auth.outputs.publish == 'true'
-        working-directory: pkg
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
-
   release:
+    name: GitHub release
     needs: [gui-binaries, tui-binaries, npm-package]
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Verify release asset names
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          expected_file="$(mktemp)"
+          actual_file="$(mktemp)"
+          trap 'rm -f "${expected_file}" "${actual_file}"' EXIT
+          {
+            echo "keysmith-${RELEASE_TAG}-linux-amd64"
+            echo "keysmith-${RELEASE_TAG}-darwin-arm64"
+            echo "keysmith-${RELEASE_TAG}-windows-amd64.exe"
+            for target in \
+              linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 \
+              windows-amd64 windows-arm64; do
+              if [[ "${target}" == windows-* ]]; then
+                echo "keysmith-tui-${RELEASE_TAG}-${target}.exe"
+              else
+                echo "keysmith-tui-${RELEASE_TAG}-${target}"
+              fi
+            done
+            echo "keysmith-${RELEASE_TAG#v}.tgz"
+          } | sort > "${expected_file}"
+          find artifacts -type f -printf '%f\n' | sort > "${actual_file}"
+          diff -u "${expected_file}" "${actual_file}"
+          while IFS= read -r asset; do
+            asset_path="$(find artifacts -type f -name "${asset}" -print -quit)"
+            test -n "${asset_path}"
+            test -s "${asset_path}"
+          done < "${expected_file}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -203,3 +317,48 @@ jobs:
           files: artifacts/**/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  npm-publish:
+    name: publish npm
+    needs: [release, npm-package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download npm package
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: npm-package
+
+      - name: Check npm credentials
+        id: auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::warning::NPM_TOKEN is not configured; the GitHub release was published without publishing to npm."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js for publishing
+        if: steps.auth.outputs.publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npm
+        if: steps.auth.outputs.publish == 'true'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ contains(env.RELEASE_TAG, '-') && 'next' || 'latest' }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' tarballs < <(find npm-package -maxdepth 1 -type f -name '*.tgz' -print0)
+          test "${#tarballs[@]}" -eq 1
+          npm publish "${tarballs[0]}" --access public --tag "${NPM_DIST_TAG:-latest}"

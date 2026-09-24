@@ -1,6 +1,8 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +23,8 @@ func TestValidKeyName(t *testing.T) {
 		{"has space", false},
 		{"slash/name", false},
 		{"../escape", false},
+		{".", false},
+		{"..", false},
 	}
 	for _, c := range cases {
 		if got := ValidKeyName(c.name); got != c.want {
@@ -46,6 +50,7 @@ func withTempHOME(t *testing.T) {
 func fakeTool(t *testing.T, fn func(name string, args []string) (string, int)) (restore func()) {
 	t.Helper()
 	orig := runTool
+	origContext := runToolContext
 	runTool = func(name string, args ...string) *exec.Cmd {
 		out, code := fn(name, args)
 		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
@@ -56,7 +61,10 @@ func fakeTool(t *testing.T, fn func(name string, args []string) (string, int)) (
 		)
 		return cmd
 	}
-	return func() { runTool = orig }
+	runToolContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return runTool(name, args...)
+	}
+	return func() { runTool = orig; runToolContext = origContext }
 }
 
 // TestHelperProcess is the child side of fakeTool: it echoes the canned
@@ -153,6 +161,13 @@ func TestGenerateInvalidNameRejected(t *testing.T) {
 		if len(dir) > 0 {
 			t.Logf("~/.ssh unexpectedly populated: %d entries", len(dir))
 		}
+	}
+}
+
+func TestDeleteInvalidNameRejected(t *testing.T) {
+	withTempHOME(t)
+	if err := DeleteKey(".."); !errors.Is(err, ErrInvalidKeyName) {
+		t.Fatalf("DeleteKey(%q) error = %v, want ErrInvalidKeyName", "..", err)
 	}
 }
 

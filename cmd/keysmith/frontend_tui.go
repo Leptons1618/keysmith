@@ -2,9 +2,15 @@
 
 package main
 
-import "keysmith/internal/tui"
+import (
+	"fmt"
 
-// runFrontend serves the terminal UI only: tui-tagged builds are pure Go,
-// so they can be cross-compiled without any C toolchain. Frontend flags
-// are accepted but ignored.
-func runFrontend(bool) error { return tui.Run() }
+	"keysmith/internal/tui"
+)
+
+func runFrontend(mode frontendMode) error {
+	if mode != tuiMode {
+		return fmt.Errorf("this binary only supports the terminal UI; use the default keysmith binary for --gui")
+	}
+	return tui.Run()
+}
