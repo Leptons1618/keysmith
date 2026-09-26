@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -20,6 +21,7 @@ const (
 	scrService
 	scrInstructions
 	scrResult
+	scrAgent
 )
 
 // form focus order
@@ -41,6 +43,19 @@ const (
 	opAddAgent
 	opCheckAgent
 	opTest
+)
+
+// helpTopic identifies which key bindings the help overlay should describe.
+type helpTopic int
+
+const (
+	helpGlobal helpTopic = iota
+	helpHome
+	helpForm
+	helpBrowser
+	helpService
+	helpInstructions
+	helpResult
 )
 
 type model struct {
@@ -67,6 +82,23 @@ type model struct {
 	browserPick   bool // browser opened to PICK a key for a test
 	confirmDelete bool
 
+	// filter is the incremental key search on the key wall.
+	filter      textinput.Model
+	filtering   bool
+	filterQuery string
+
+	// help is the overlay toggle.
+	help      bool
+	helpTopic helpTopic
+
+	// visible caches the filtered key list. Reads go through visibleKeys so a
+	// caller that set keys without filtering still sees them.
+	visible []core.KeyInfo
+
+	// agent holds the last agent inventory.
+	agent        core.AgentState
+	agentChecked bool
+
 	width  int
 	height int
 
@@ -80,8 +112,9 @@ type model struct {
 	opID     uint64
 	spinner  spinner.Model
 
-	status string
-	errMsg string
+	status     string
+	statusTone tone
+	errMsg     string
 }
 
 func newModel() model {
@@ -93,10 +126,17 @@ func newModel() model {
 			ti.EchoMode = textinput.EchoPassword
 		}
 		ti.Prompt = ""
+		ti.Cursor.Style = cursorStyle()
 		return ti
 	}
 
 	sp := spinner.New(spinner.WithSpinner(spinner.Line))
+
+	filter := textinput.New()
+	filter.Placeholder = "filter keys…"
+	filter.Prompt = "/ "
+	filter.CharLimit = 60
+	filter.Cursor.Style = cursorStyle()
 
 	m := model{
 		screen:  scrHome,
@@ -106,7 +146,7 @@ func newModel() model {
 		comment: mk("you@laptop", false),
 		pass:    mk("passphrase", true),
 		confirm: mk("repeat passphrase", true),
-		status:  "",
+		filter:  filter,
 	}
 	m.name.SetValue("id_ed25519")
 	return m
@@ -143,6 +183,9 @@ func (m *model) back() {
 	m.errMsg = ""
 	m.screen = prev
 	m.menuIdx = 0
+	m.filtering = false
+	m.filterQuery = ""
+	m.filter.SetValue("")
 	if prev == scrHome {
 		m.browserPick = false
 	}
@@ -153,12 +196,13 @@ func (m *model) back() {
 
 func (m *model) loadKeys() {
 	m.keys = core.ListKeys()
-	if len(m.keys) == 0 {
+	m.applyFilter("")
+	if len(m.visible) == 0 {
 		m.selected = ""
 		return
 	}
 	found := -1
-	for i, k := range m.keys {
+	for i, k := range m.visible {
 		if k.Name == m.selected {
 			found = i
 			break
@@ -168,18 +212,50 @@ func (m *model) loadKeys() {
 		found = 0
 	}
 	m.menuIdx = found
-	m.selected = m.keys[found].Name
+	m.selected = m.visible[found].Name
+}
+
+// applyFilter recomputes the visible key list from the filter query. An empty
+// query shows everything, so search is purely additive.
+func (m *model) applyFilter(query string) {
+	m.filterQuery = query
+	m.visible = filterKeys(m.keys, query)
+}
+
+// filterKeys returns the keys whose name contains query, case-insensitively.
+// An empty query matches everything.
+func filterKeys(keys []core.KeyInfo, query string) []core.KeyInfo {
+	if query == "" {
+		return keys
+	}
+	needle := strings.ToLower(query)
+	var out []core.KeyInfo
+	for _, k := range keys {
+		if strings.Contains(strings.ToLower(k.Name), needle) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// visibleKeys is the filtered key list the browser renders. It falls back to
+// filtering keys directly, so a caller that populated keys without going
+// through applyFilter still sees them.
+func (m model) visibleKeys() []core.KeyInfo {
+	if m.visible != nil {
+		return m.visible
+	}
+	return filterKeys(m.keys, m.filterQuery)
 }
 
 func (m *model) reloadKeepingCursor() {
-	old := m.keys
 	m.keys = core.ListKeys()
-	if m.menuIdx >= len(m.keys) {
-		m.menuIdx = maxInt(0, len(m.keys)-1)
+	m.applyFilter(m.filterQuery)
+	if m.menuIdx >= len(m.visible) {
+		m.menuIdx = maxInt(0, len(m.visible)-1)
 	}
-	_ = old
-	if len(m.keys) > 0 {
-		m.selected = m.keys[m.menuIdx].Name
+	if len(m.visible) > 0 {
+		m.selected = m.visible[m.menuIdx].Name
 	} else {
 		m.selected = ""
 	}
@@ -198,11 +274,21 @@ func clearConfirmLater() tea.Cmd {
 func (m *model) setStatus(s string) {
 	m.errMsg = ""
 	m.status = s
+	m.statusTone = toneNeutral
+}
+
+// setStatusTone records a status message with an explicit tone, so the status
+// bar can colour it the same way the GUI does.
+func (m *model) setStatusTone(s string, t tone) {
+	m.errMsg = ""
+	m.status = s
+	m.statusTone = t
 }
 
 func (m *model) setError(s string) {
 	m.errMsg = s
 	m.status = ""
+	m.statusTone = toneDanger
 }
 
 func elideMiddle(s string, max int) string {
@@ -219,8 +305,4 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func timestamp() string {
-	return time.Now().Format("15:04:05")
 }

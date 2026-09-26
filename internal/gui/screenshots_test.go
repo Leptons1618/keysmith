@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/theme"
 	fynetest "fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 
 	"keysmith/internal/core"
 )
@@ -139,9 +139,15 @@ func TestRenderScreenshots(t *testing.T) {
 				ui.navigate(scrResult)
 			}},
 			{"16-empty-keys", func() {
-				blank := t.TempDir()
-				t.Setenv("HOME", blank)
+				// Point at an empty home, then restore it so the scenes after
+				// this one still have the seeded keys.
+				original := os.Getenv("HOME")
+				t.Setenv("HOME", t.TempDir())
+				t.Setenv("USERPROFILE", os.Getenv("HOME"))
 				ui.navigate(scrKeys)
+				ui.win.Content().MinSize()
+				t.Setenv("HOME", original)
+				t.Setenv("USERPROFILE", original)
 			}},
 			{"17-status-error", func() {
 				ui.navigate(scrKeys)
@@ -179,8 +185,8 @@ func seedRealisticKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	pubs := map[string]string{
-		"id_ed25519":     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHq0m2XnR8vKk1pQfZ7yL3dJ5sW9aBcDeFgHiJkLmNoP you@laptop",
-		"id_rsa_work":    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7x2vN8kLmR4tY6uI0oP2aS4dF6gH8jK1lZ3xC5vB7nM9qR2sT4uV6wX8yZ0aB1cD3eF5gH7jK9lZ1xC3vB5nM7qR9s work@box",
+		"id_ed25519":  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHq0m2XnR8vKk1pQfZ7yL3dJ5sW9aBcDeFgHiJkLmNoP you@laptop",
+		"id_rsa_work": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7x2vN8kLmR4tY6uI0oP2aS4dF6gH8jK1lZ3xC5vB7nM9qR2sT4uV6wX8yZ0aB1cD3eF5gH7jK9lZ1xC3vB5nM7qR9s work@box",
 		"a_very_long_key_name_for_testing_elision_behaviour": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG5nR7tY2uI4oP6aS8dF0gH2jK4lZ6xC8vB0nM2qR4sT6uV8w long@name",
 	}
 	for name, pub := range pubs {

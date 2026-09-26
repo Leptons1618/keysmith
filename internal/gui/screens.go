@@ -2,7 +2,6 @@ package gui
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -531,10 +530,7 @@ func (u *appUI) agentContent() fyne.CanvasObject {
 	if u.agentChecked {
 		if u.agent.Reachable {
 			stateText := "Agent reachable"
-			stateName := fmt.Sprintf("%d key(s) loaded", len(u.agent.Keys))
-			if len(u.agent.Keys) == 0 {
-				stateName = "No keys loaded"
-			}
+			stateName := loadedKeysLabel(len(u.agent.Keys))
 			status = vStack(gapMD,
 				chipRow(chip(toneSuccess, stateText), chipText(toneNeutral, stateName)),
 				body("ssh-add answered, so this session can use keys held by the agent."),

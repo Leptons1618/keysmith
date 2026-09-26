@@ -310,7 +310,7 @@ func (l *railLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 		return fyne.NewSize(l.width, 0)
 	}
 	body := objects[1].MinSize()
-	return fyne.NewSize(l.width + body.Width, body.Height)
+	return fyne.NewSize(l.width+body.Width, body.Height)
 }
 
 // shellFrame composes the pinned rail with the scrolling content pane.
@@ -381,7 +381,7 @@ func (l *splitLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	if b.Height > height {
 		height = b.Height
 	}
-	return fyne.NewSize(a.Width + b.Width, height)
+	return fyne.NewSize(a.Width+b.Width, height)
 }
 
 // pinLayout keeps a child at its natural size, anchored top-left.
@@ -574,6 +574,19 @@ func quiet(text string, onTap func()) *widget.Button {
 	b := widget.NewButton(text, onTap)
 	b.Importance = widget.LowImportance
 	return b
+}
+
+// loadedKeysLabel describes how many keys the agent is holding, in plain
+// English rather than "1 key(s)".
+func loadedKeysLabel(n int) string {
+	switch n {
+	case 0:
+		return "No keys loaded"
+	case 1:
+		return "1 key loaded"
+	default:
+		return strconv.Itoa(n) + " keys loaded"
+	}
 }
 
 // --- empty state ------------------------------------------------------------

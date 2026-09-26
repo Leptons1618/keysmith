@@ -29,41 +29,41 @@ func mustHex(s string) color.Color {
 // widgets (RichText, labels, entries) can be themed by role rather than by
 // raw hex, and so every color still follows the light/dark variant.
 const (
-	keyInk          fyne.ThemeColorName = "keysmithInk"
-	keyInkBody      fyne.ThemeColorName = "keysmithInkBody"
-	keyMuted        fyne.ThemeColorName = "keysmithMuted"
-	keyAccent       fyne.ThemeColorName = "keysmithAccent"
-	keyAccentInk    fyne.ThemeColorName = "keysmithAccentInk"
-	keyAccentTint   fyne.ThemeColorName = "keysmithAccentTint"
-	keyOnAccent     fyne.ThemeColorName = "keysmithOnAccent"
-	keySuccess      fyne.ThemeColorName = "keysmithSuccess"
-	keySuccessTint  fyne.ThemeColorName = "keysmithSuccessTint"
-	keyDanger       fyne.ThemeColorName = "keysmithDanger"
-	keyDangerTint   fyne.ThemeColorName = "keysmithDangerTint"
-	keyWarning      fyne.ThemeColorName = "keysmithWarning"
-	keyWarningTint  fyne.ThemeColorName = "keysmithWarningTint"
-	keySurface      fyne.ThemeColorName = "keysmithSurface"
-	keySurfaceAlt   fyne.ThemeColorName = "keysmithSurfaceAlt"
-	keyCanvas       fyne.ThemeColorName = "keysmithCanvas"
-	keyBorder       fyne.ThemeColorName = "keysmithBorder"
+	keyInk         fyne.ThemeColorName = "keysmithInk"
+	keyInkBody     fyne.ThemeColorName = "keysmithInkBody"
+	keyMuted       fyne.ThemeColorName = "keysmithMuted"
+	keyAccent      fyne.ThemeColorName = "keysmithAccent"
+	keyAccentInk   fyne.ThemeColorName = "keysmithAccentInk"
+	keyAccentTint  fyne.ThemeColorName = "keysmithAccentTint"
+	keyOnAccent    fyne.ThemeColorName = "keysmithOnAccent"
+	keySuccess     fyne.ThemeColorName = "keysmithSuccess"
+	keySuccessTint fyne.ThemeColorName = "keysmithSuccessTint"
+	keyDanger      fyne.ThemeColorName = "keysmithDanger"
+	keyDangerTint  fyne.ThemeColorName = "keysmithDangerTint"
+	keyWarning     fyne.ThemeColorName = "keysmithWarning"
+	keyWarningTint fyne.ThemeColorName = "keysmithWarningTint"
+	keySurface     fyne.ThemeColorName = "keysmithSurface"
+	keySurfaceAlt  fyne.ThemeColorName = "keysmithSurfaceAlt"
+	keyCanvas      fyne.ThemeColorName = "keysmithCanvas"
+	keyBorder      fyne.ThemeColorName = "keysmithBorder"
 )
 
 // variantSet is the full semantic palette for one theme variant. Every field
 // has a meaning; screens compose these tokens rather than raw hex values.
 type variantSet struct {
-	canvas, canvasAlt   color.Color // app background, recessed wells
-	surface, surfaceAlt color.Color // cards, inset rows
-	input, inputBorder  color.Color
-	ink, inkBody, muted color.Color // text ramp: strong / body / caption
-	border, borderStrong color.Color
-	accent, accentHover color.Color
+	canvas, canvasAlt     color.Color // app background, recessed wells
+	surface, surfaceAlt   color.Color // cards, inset rows
+	input, inputBorder    color.Color
+	ink, inkBody, muted   color.Color // text ramp: strong / body / caption
+	border, borderStrong  color.Color
+	accent, accentHover   color.Color
 	accentTint, accentInk color.Color // wash fill, text on the wash
-	onAccent            color.Color
-	success, successTint color.Color
-	danger, dangerTint   color.Color
-	warning, warningTint color.Color
-	disabled             color.Color
-	focus                color.Color
+	onAccent              color.Color
+	success, successTint  color.Color
+	danger, dangerTint    color.Color
+	warning, warningTint  color.Color
+	disabled              color.Color
+	focus                 color.Color
 }
 
 var (

@@ -38,7 +38,7 @@ func (m model) copyPubKey(keyName string) (tea.Model, tea.Cmd) {
 		m.setError("Public key copied, but saving key state failed: " + err.Error())
 		return m, clearErrLater()
 	}
-	m.setStatus("Public key copied to clipboard")
+	m.setStatusTone("Public key copied to clipboard", toneSuccess)
 	return m, nil
 }
 
@@ -78,8 +78,8 @@ func (m model) addToAgent(keyName string) (tea.Model, tea.Cmd) {
 		m.setError("No key selected.")
 		return m, clearErrLater()
 	}
-	return m.startOp(opAddAgent, func(ctx context.Context) (core.Result, []core.HostResult) {
-		return core.AddToAgentContext(ctx, keyName), nil
+	return m.startOp(opAddAgent, func(ctx context.Context) (core.Result, []core.HostResult, core.AgentState) {
+		return core.AddToAgentContext(ctx, keyName), nil, core.AgentState{}
 	}, "Adding key to SSH agent...")
 }
 
@@ -112,7 +112,7 @@ func (m model) deleteSelected() (tea.Model, tea.Cmd) {
 		m.selected = ""
 	}
 	m.reloadKeepingCursor()
-	m.setStatus(fmt.Sprintf("Deleted '%s'", key))
+	m.setStatusTone(fmt.Sprintf("Deleted '%s'", key), toneSuccess)
 	return m, nil
 }
 
@@ -125,10 +125,11 @@ func (m model) runTest() (tea.Model, tea.Cmd) {
 	svc := m.svc
 	if svc.ID == "" {
 		svc, _ = core.ServiceByID("github")
+		m.svc = svc
 	}
-	return m.startOp(opTest, func(ctx context.Context) (core.Result, []core.HostResult) {
+	return m.startOp(opTest, func(ctx context.Context) (core.Result, []core.HostResult, core.AgentState) {
 		r := core.TestServiceContext(ctx, svc, key)
-		return core.Result{}, []core.HostResult{r}
+		return core.Result{}, []core.HostResult{r}, core.AgentState{}
 	}, "Testing connection to "+svc.Name+"...")
 }
 

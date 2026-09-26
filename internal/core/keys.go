@@ -186,6 +186,8 @@ func KeyKind(keyName string) (string, bool) {
 }
 
 // kindFromFingerprint parses "4096 SHA256:… comment (RSA)" into "RSA 4096".
+// The bit count is only shown where it actually varies: Ed25519 and DSA have a
+// single fixed size, and repeating it on every row is noise.
 func kindFromFingerprint(fp string) (string, bool) {
 	if fp == "" {
 		return "", false
@@ -197,6 +199,9 @@ func kindFromFingerprint(fp string) (string, bool) {
 	algo := strings.ToUpper(trimSpace(fp[open+1 : len(fp)-1]))
 	if algo == "" {
 		return "", false
+	}
+	if algo == "ED25519" || algo == "DSA" || algo == "ECDSA" {
+		return algo, true
 	}
 	bits := strings.Fields(fp)[0]
 	if _, err := strconv.Atoi(bits); err == nil {

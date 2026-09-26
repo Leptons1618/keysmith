@@ -76,7 +76,9 @@ func AgentInfo(ctx context.Context) AgentState {
 	return AgentState{Raw: out}
 }
 
-// parseAgentKeys reads "256 SHA256:… you@laptop (ED25519)" lines.
+// parseAgentKeys reads "256 SHA256:… you@laptop (ED25519)" lines. Lines that
+// do not look like key listings — such as an error message from ssh-add — are
+// skipped rather than misread as a key.
 func parseAgentKeys(out string) []AgentKey {
 	var keys []AgentKey
 	for _, line := range strings.Split(out, "\n") {
@@ -88,19 +90,44 @@ func parseAgentKeys(out string) []AgentKey {
 		if len(fields) < 2 {
 			continue
 		}
-		k := AgentKey{}
-		if bits, err := strconv.Atoi(fields[0]); err == nil {
-			k.Bits = bits
+
+		// A listing always starts with a bit count and a digest. Requiring both
+		// is what keeps prose from being parsed as a key.
+		bits, err := strconv.Atoi(fields[0])
+		if err != nil || bits <= 0 {
+			continue
 		}
-		k.Fingerprint = fields[1]
+		if !looksLikeFingerprint(fields[1]) {
+			continue
+		}
+
+		k := AgentKey{Bits: bits, Fingerprint: fields[1]}
 		rest := fields[2:]
+
+		// The trailing "(TYPE)" belongs to the kind, not the comment.
 		if close := strings.LastIndex(line, "("); close >= 0 && strings.HasSuffix(line, ")") {
 			k.Kind = strings.ToUpper(line[close+1 : len(line)-1])
+			rest = fields[2 : len(fields)-1]
 		}
 		k.Comment = strings.TrimSpace(strings.Join(rest, " "))
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// looksLikeFingerprint reports whether a token is a digest such as
+// "SHA256:…" or "aa:bb:…", rather than an ordinary word.
+func looksLikeFingerprint(token string) bool {
+	if strings.Contains(token, ":") {
+		return true
+	}
+	// Old-style MD5 fingerprints are bare hex in colon-separated pairs.
+	for _, c := range token {
+		if !strings.ContainsRune("0123456789abcdefABCDEF:", c) {
+			return false
+		}
+	}
+	return len(token) >= 32
 }
 
 // AddToAgentContext loads a private key and stops ssh-add when ctx is cancelled.

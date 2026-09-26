@@ -16,16 +16,18 @@ type opDoneMsg struct {
 	opID    uint64
 	kind    opKind
 	res     core.Result
-	results []core.HostResult // opTest carries exactly one
+	results []core.HostResult // opTest and opCheckAgent carry agent details
+	agent   core.AgentState
 }
 
 type clearErrMsg struct{}
 
-const errTimeout = 4 * time.Second
+const errTimeout = 6 * time.Second
 
 func (m model) Init() tea.Cmd {
 	return nil
 }
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -71,14 +73,36 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			m.cancelOp()
 			m.busy = false
-			m.setStatus("Cancelled")
+			m.setStatusTone("Cancelled", toneWarning)
 		}
 		return m, nil
+	}
+
+	// The help overlay swallows everything except the keys that close it.
+	if m.help {
+		switch key {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "?", "esc", "q", "enter":
+			m.help = false
+		case "t":
+			m.helpTopic = nextHelpTopic(m.helpTopic)
+		}
+		return m, nil
+	}
+
+	// The key wall's filter owns the keyboard while it is open.
+	if m.filtering {
+		return m.updateFilter(msg, key)
 	}
 
 	switch key {
 	case "ctrl+c":
 		return m, tea.Quit
+	case "?":
+		m.help = true
+		m.helpTopic = m.helpTopicFor()
+		return m, nil
 	case "esc":
 		if m.screen == scrHome {
 			return m, tea.Quit
@@ -102,8 +126,66 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateInstructions(key)
 	case scrResult:
 		return m.updateResult(key)
+	case scrAgent:
+		return m.updateAgent(key)
 	}
 	return m, nil
+}
+
+// nextHelpTopic cycles through the help sections.
+func nextHelpTopic(t helpTopic) helpTopic {
+	order := []helpTopic{helpGlobal, helpHome, helpForm, helpBrowser, helpService, helpInstructions, helpResult}
+	for i, o := range order {
+		if o == t {
+			return order[(i+1)%len(order)]
+		}
+	}
+	return helpGlobal
+}
+
+// updateFilter drives the incremental key search on the key wall.
+func (m model) updateFilter(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.filtering = false
+		m.applyFilter("")
+		m.filter.SetValue("")
+		m.restoreSelection()
+		return m, nil
+	case "enter":
+		m.filtering = false
+		m.restoreSelection()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.filter, cmd = m.filter.Update(msg)
+	query := m.filter.Value()
+	if query != m.filterQuery {
+		m.applyFilter(query)
+		m.clampCursor()
+	}
+	return m, cmd
+}
+
+// restoreSelection keeps the highlighted key when the filter is dismissed.
+func (m *model) restoreSelection() {
+	visible := m.visibleKeys()
+	m.clampCursor()
+	if len(visible) > 0 {
+		m.selected = visible[m.menuIdx].Name
+	}
+}
+
+// clampCursor keeps the cursor inside the visible list.
+func (m *model) clampCursor() {
+	n := len(m.visibleKeys())
+	if m.menuIdx >= n {
+		m.menuIdx = maxInt(0, n-1)
+	}
+	if m.menuIdx < 0 {
+		m.menuIdx = 0
+	}
 }
 
 // --- HOME ------------------------------------------------------------
@@ -137,17 +219,21 @@ func (m model) homeAction() (tea.Model, tea.Cmd) {
 		m.focusFirstFormField()
 	case 1:
 		m.browserPick = false
+		m.loadKeys()
 		m.push(scrBrowser)
 		if len(m.keys) == 0 {
 			m.setError("No keys yet. Choose \"Set up a new SSH key\" first.")
 		}
 	case 2:
 		m.browserPick = true
+		m.loadKeys()
 		m.push(scrBrowser)
+		if len(m.keys) == 0 {
+			m.setError("No keys yet. Choose \"Set up a new SSH key\" first.")
+		}
 	case 3:
-		return m.startOp(opCheckAgent, func(ctx context.Context) (core.Result, []core.HostResult) {
-			return core.CheckAgentContext(ctx), nil
-		}, "Checking SSH agent...")
+		m.push(scrAgent)
+		return m.checkAgent()
 	}
 	return m, nil
 }
@@ -168,6 +254,14 @@ func (m *model) resetForm() {
 
 var algos = []core.KeyAlgorithm{core.AlgoEd25519, core.AlgoRSA, core.AlgoECDSA}
 
+// algoLabels are the display names for the algorithm selector. The raw
+// ssh-keygen names read as jargon on a picker.
+var algoLabels = map[core.KeyAlgorithm]string{
+	core.AlgoEd25519: "Ed25519",
+	core.AlgoRSA:     "RSA 4096",
+	core.AlgoECDSA:   "ECDSA",
+}
+
 func (m *model) focusFirstFormField() {
 	m.formPos = fName
 	m.blurAllInputs()
@@ -182,33 +276,28 @@ func (m *model) blurAllInputs() {
 	m.confirm.Blur()
 }
 
-func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, isKey := msg.(tea.KeyMsg)
+func (m model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	name := msg.String()
 
-	if isKey && key.String() == "enter" {
+	if name == "enter" {
 		return m.submitGenerate()
 	}
 
-	if isKey {
-		switch key.String() {
-		case "tab":
-			m.formPos = (m.formPos + 1) % fFormCount
-			m.syncFormFocus()
-			return m, nil
-		case "shift+tab":
-			m.formPos = (m.formPos + fFormCount - 1) % fFormCount
-			m.syncFormFocus()
-			return m, nil
-		}
+	switch name {
+	case "tab":
+		m.formPos = (m.formPos + 1) % fFormCount
+		m.syncFormFocus()
+		return m, nil
+	case "shift+tab":
+		m.formPos = (m.formPos + fFormCount - 1) % fFormCount
+		m.syncFormFocus()
+		return m, nil
 	}
 
 	var cmd tea.Cmd
 	switch m.formPos {
 	case fAlgo:
-		if !isKey {
-			break
-		}
-		switch key.String() {
+		switch name {
 		case "left", "h":
 			m.algoIdx = (m.algoIdx + len(algos) - 1) % len(algos)
 		case "right", "l":
@@ -226,7 +315,7 @@ func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fConfirm:
 		m.confirm, cmd = m.confirm.Update(msg)
 	case fShow:
-		if isKey && key.String() == " " {
+		if name == " " {
 			m.showPass = !m.showPass
 			if m.showPass {
 				m.pass.EchoMode = textinput.EchoNormal
@@ -237,7 +326,7 @@ func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case fForce:
-		if isKey && key.String() == " " {
+		if name == " " {
 			m.force = !m.force
 		}
 	}
@@ -279,8 +368,8 @@ func (m model) submitGenerate() (tea.Model, tea.Cmd) {
 	comment := strings.TrimSpace(m.comment.Value())
 	force := m.force
 
-	return m.startOp(opGenerate, func(ctx context.Context) (core.Result, []core.HostResult) {
-		return core.GenerateKeyContext(ctx, algo, name, comment, pass, force), nil
+	return m.startOp(opGenerate, func(ctx context.Context) (core.Result, []core.HostResult, core.AgentState) {
+		return core.GenerateKeyContext(ctx, algo, name, comment, pass, force), nil, core.AgentState{}
 	}, "Generating your key...")
 }
 
@@ -290,37 +379,45 @@ func (m model) updateBrowser(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q":
 		return m, tea.Quit
+	case "/":
+		m.filtering = true
+		m.filter.SetValue(m.filterQuery)
+		m.filter.CursorEnd()
+		m.filter.Focus()
+		return m, textinput.Blink
 	case "up", "k":
 		if m.menuIdx > 0 {
 			m.menuIdx--
-			if len(m.keys) > 0 {
-				m.selected = m.keys[m.menuIdx].Name
-			}
+			m.syncBrowserSelection()
 		}
 	case "down", "j":
-		if m.menuIdx < len(m.keys)-1 {
+		if m.menuIdx < len(m.visibleKeys())-1 {
 			m.menuIdx++
-			if len(m.keys) > 0 {
-				m.selected = m.keys[m.menuIdx].Name
-			}
+			m.syncBrowserSelection()
 		}
 	case "enter":
-		if m.browserPick {
-			m.browserPick = false
-			m.push(scrService)
-			return m, nil
-		}
+		m.filtering = false
 		m.push(scrService)
 		return m, nil
+	case "c":
+		return m.copyPubKey(m.selected)
+	case "a":
+		return m.addToAgent(m.selected)
 	case "d":
 		return m.deleteSelected()
 	}
 	return m, nil
 }
 
-func (m model) openActionsMenu() (tea.Model, tea.Cmd) {
-	m.push(scrService)
-	return m, nil
+// syncBrowserSelection keeps the subject key in step with the cursor.
+func (m *model) syncBrowserSelection() {
+	visible := m.visibleKeys()
+	if len(visible) == 0 {
+		m.selected = ""
+		return
+	}
+	m.clampCursor()
+	m.selected = visible[m.menuIdx].Name
 }
 
 // --- KEY READY ---------------------------------------------------------
@@ -350,7 +447,7 @@ func (m model) updateService(key string) (tea.Model, tea.Cmd) {
 			m.menuIdx--
 		}
 	case "down", "j":
-		if m.menuIdx < n { // n = last index is Skip
+		if m.menuIdx < n { // n is the index of "Skip for now"
 			m.menuIdx++
 		}
 	}
@@ -364,7 +461,7 @@ func (m model) updateService(key string) (tea.Model, tea.Cmd) {
 	if pick >= 0 {
 		if pick >= n {
 			m.gotoScreen(scrHome)
-			m.setStatus("Setup skipped.")
+			m.setStatusTone("Setup skipped.", toneNeutral)
 			return m, nil
 		}
 		m.svc = core.Services[pick]
@@ -389,8 +486,20 @@ func (m model) updateInstructions(key string) (tea.Model, tea.Cmd) {
 			m.setError("Could not save service workflow state: " + err.Error())
 			return m, clearErrLater()
 		}
-		m.setStatus("Marked key as added to " + m.svc.Name + ".")
+		m.setStatusTone("Marked key as added to "+m.svc.Name+".", toneSuccess)
 		return m, nil
+	}
+	return m, nil
+}
+
+// --- AGENT ---------------------------------------------------------------
+
+func (m model) updateAgent(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "c":
+		return m.checkAgent()
+	case "h":
+		m.gotoScreen(scrHome)
 	}
 	return m, nil
 }
@@ -425,7 +534,13 @@ func (m model) subjectKey() string {
 
 // --- async ops ------------------------------------------------------------
 
-func (m model) startOp(kind opKind, fn func(ctx context.Context) (core.Result, []core.HostResult), busyMsg string) (tea.Model, tea.Cmd) {
+// startOp runs fn off the UI goroutine, showing a spinner and accepting a
+// cancel. onDone is delivered back on the UI goroutine through the model.
+func (m model) startOp(
+	kind opKind,
+	fn func(ctx context.Context) (core.Result, []core.HostResult, core.AgentState),
+	busyMsg string,
+) (tea.Model, tea.Cmd) {
 	if m.busy {
 		return m, nil
 	}
@@ -442,17 +557,18 @@ func (m model) startOp(kind opKind, fn func(ctx context.Context) (core.Result, [
 		type outcome struct {
 			res     core.Result
 			results []core.HostResult
+			agent   core.AgentState
 		}
 		done := make(chan outcome, 1)
 		go func() {
-			res, results := fn(ctx)
-			done <- outcome{res, results}
+			res, results, agent := fn(ctx)
+			done <- outcome{res, results, agent}
 		}()
 		select {
 		case <-ch:
 			return
 		case out := <-done:
-			completions <- opDoneMsg{opID: opID, kind: kind, res: out.res, results: out.results}
+			completions <- opDoneMsg{opID: opID, kind: kind, res: out.res, results: out.results, agent: out.agent}
 		}
 	}()
 	return m, tea.Batch(m.spinner.Tick, awaitCompletion())
@@ -473,12 +589,21 @@ func awaitCompletion() tea.Cmd {
 	}
 }
 
+// checkAgent probes the agent and records both its reachability and its
+// contents, so the agent screen can show real data.
+func (m model) checkAgent() (tea.Model, tea.Cmd) {
+	return m.startOp(opCheckAgent, func(ctx context.Context) (core.Result, []core.HostResult, core.AgentState) {
+		return core.CheckAgentContext(ctx), nil, core.AgentInfo(ctx)
+	}, "Checking the SSH agent...")
+}
+
 func (m model) finishOp(msg opDoneMsg) model {
 	if !m.busy || msg.opID != m.opID {
 		return m
 	}
 	m.busy = false
 	m.cancelCh = nil
+
 	switch msg.kind {
 	case opGenerate:
 		name := strings.TrimSpace(m.name.Value())
@@ -490,26 +615,32 @@ func (m model) finishOp(msg opDoneMsg) model {
 			m.selected = name
 			m.loadKeys()
 			m.gotoScreen(scrKeyReady)
-			m.setStatus("Your key is ready.")
+			m.setStatusTone("Your key is ready.", toneSuccess)
 		} else {
 			m.setError(msg.res.Message)
 		}
 	case opAddAgent:
-		if msg.res.OK {
-			key := m.subjectKey()
-			if err := m.store.MarkAgentLoaded(key); err != nil {
-				m.setError("Key added to agent, but saving key state failed: " + err.Error())
-			} else {
-				m.setStatus(msg.res.Message)
-			}
-		} else {
+		if !msg.res.OK {
 			m.setError(msg.res.Message)
+			break
 		}
+		key := m.subjectKey()
+		if err := m.store.MarkAgentLoaded(key); err != nil {
+			m.setError("Key added to agent, but saving key state failed: " + err.Error())
+			break
+		}
+		m.agentChecked = false
+		m.setStatusTone(msg.res.Message, toneSuccess)
 	case opCheckAgent:
+		m.agentChecked = true
+		m.agent = msg.agent
 		if msg.res.OK {
-			m.setStatus(msg.res.Message)
+			m.setStatusTone(msg.res.Message, toneSuccess)
 		} else {
-			m.setError(msg.res.Message)
+			m.setStatusTone(msg.res.Message, toneWarning)
+		}
+		if m.screen != scrAgent {
+			m.gotoScreen(scrAgent)
 		}
 	case opTest:
 		if len(msg.results) == 0 {
@@ -522,11 +653,11 @@ func (m model) finishOp(msg opDoneMsg) model {
 		if err := m.store.RecordTest(key, m.success); err != nil {
 			m.setError("Test finished, but saving key state failed: " + err.Error())
 		}
+		m.gotoScreen(scrResult)
 		if m.success {
-			m.gotoScreen(scrResult)
-			m.setStatus("Connected to " + m.svc.Name + "!")
+			m.setStatusTone("Connected to "+m.svc.Name+"!", toneSuccess)
 		} else {
-			m.gotoScreen(scrResult)
+			m.setStatusTone("Not connected to "+m.svc.Name+". See the diagnosis.", toneWarning)
 		}
 	}
 	return m
