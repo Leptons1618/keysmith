@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -155,6 +156,80 @@ func Fingerprint(keyName string) string {
 		return ""
 	}
 	return trimSpace(out)
+}
+
+// ShortFingerprint returns just the SHA256 digest from an ssh-keygen -lf line
+// ("256 SHA256:abc… comment (ED25519)" becomes "SHA256:abc…"), or "" when the
+// line carries no digest.
+func ShortFingerprint(fp string) string {
+	for _, field := range strings.Fields(fp) {
+		if strings.HasPrefix(field, "SHA256:") {
+			return field
+		}
+	}
+	return ""
+}
+
+// KeyKind reports the algorithm behind a key as a display label such as
+// "Ed25519", "RSA 4096" or "ECDSA". ok is false when the key cannot be
+// inspected at all. The ssh-keygen fingerprint line is preferred because it
+// carries the key size as well as the algorithm; the public key prefix is the
+// fallback when ssh-keygen is unavailable.
+func KeyKind(keyName string) (string, bool) {
+	if !ValidKeyName(keyName) {
+		return "", false
+	}
+	if label, ok := kindFromFingerprint(Fingerprint(keyName)); ok {
+		return label, true
+	}
+	return kindFromPublicKey(PublicKey(keyName))
+}
+
+// kindFromFingerprint parses "4096 SHA256:… comment (RSA)" into "RSA 4096".
+func kindFromFingerprint(fp string) (string, bool) {
+	if fp == "" {
+		return "", false
+	}
+	open := strings.LastIndex(fp, "(")
+	if open < 0 || !strings.HasSuffix(fp, ")") {
+		return "", false
+	}
+	algo := strings.ToUpper(trimSpace(fp[open+1 : len(fp)-1]))
+	if algo == "" {
+		return "", false
+	}
+	bits := strings.Fields(fp)[0]
+	if _, err := strconv.Atoi(bits); err == nil {
+		return algo + " " + bits, true
+	}
+	return algo, true
+}
+
+// kindFromPublicKey reads the algorithm straight off the public key blob,
+// which always starts with the key type followed by the base64 body.
+func kindFromPublicKey(pub string) (string, bool) {
+	prefix := strings.Fields(pub)
+	if len(prefix) == 0 {
+		return "", false
+	}
+	switch prefix[0] {
+	case "ssh-ed25519":
+		return "ED25519", true
+	case "ssh-rsa":
+		return "RSA", true
+	case "ssh-dss":
+		return "DSA", true
+	case "ecdsa-sha2-nistp256":
+		return "ECDSA nistp256", true
+	case "ecdsa-sha2-nistp384":
+		return "ECDSA nistp384", true
+	case "ecdsa-sha2-nistp521":
+		return "ECDSA nistp521", true
+	}
+	if strings.HasPrefix(prefix[0], "sk-ssh-ed25519") {
+		return "ED25519 (sk)", true
+	}
+	return "", false
 }
 
 // PrivateKeyPath is the private key path for keyName under ~/.ssh.
