@@ -135,7 +135,15 @@ jobs:
           mkdir -p out
           name="keysmith-${RELEASE_TAG}-${{ matrix.platform }}"
           ext=""
-          [ "$(uname -s)" = "MINGW"* ] || [ "$(uname -s)" = "CYGWIN"* ] && ext=".exe"
+          # Derive the extension from the matrix platform, not from uname. The
+          # previous "test || test && ext=.exe" line parsed as
+          # "test || (test && ext=.exe)", so on Git Bash the first test
+          # short-circuited the assignment and the Windows GUI was uploaded
+          # without a .exe suffix. bin/keysmith.js always looks for ".exe" on
+          # Windows, so such a release was undownloadable.
+          if [ "${{ matrix.platform }}" = "windows-amd64" ]; then
+            ext=".exe"
+          fi
           output="out/${name}${ext}"
           go build -tags gui -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
             -o "${output}" ./cmd/keysmith
