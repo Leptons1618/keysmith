@@ -372,4 +372,7 @@ jobs:
           set -euo pipefail
           mapfile -d '' tarballs < <(find npm-package -maxdepth 1 -type f -name '*.tgz' -print0)
           test "${#tarballs[@]}" -eq 1
-          npm publish "${tarballs[0]}" --access public --tag "${NPM_DIST_TAG:-latest}"
+          # Prefix with ./ so npm reads this as a file path. Without it npm
+          # treats "npm-package/keysmith-1.3.0.tgz" as an owner/repo spec and
+          # shells out to git, which fails with "Repository not found".
+          npm publish "./${tarballs[0]}" --access public --tag "${NPM_DIST_TAG:-latest}"
