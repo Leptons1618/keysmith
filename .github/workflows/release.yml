@@ -245,7 +245,10 @@ jobs:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           mkdir -p out
-          npm pack --pack-destination out
+          # Pack the staged pkg/ directory, not the repository root. The root
+          # manifest is the 0.0.0-PLACEHOLDER template, so packing it yields
+          # keysmith-0.0.0-PLACEHOLDER.tgz instead of the release tarball.
+          npm pack ./pkg --pack-destination out
           mapfile -d '' tarballs < <(find out -maxdepth 1 -type f -name '*.tgz' -print0)
           test "${#tarballs[@]}" -eq 1
           expected="keysmith-${RELEASE_TAG#v}.tgz"
