@@ -1,3 +1,5 @@
+//go:build !tui
+
 package gui
 
 import (

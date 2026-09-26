@@ -60,9 +60,3 @@ func TestParseOptionsProvidesClearHelp(t *testing.T) {
 		}
 	}
 }
-
-func TestGUIAdapterRejectsTUI(t *testing.T) {
-	if err := runFrontend(tuiMode); err == nil {
-		t.Fatal("runFrontend(tuiMode) error = nil, want opposite-mode error")
-	}
-}

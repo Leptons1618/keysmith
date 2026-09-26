@@ -1,3 +1,5 @@
+//go:build !tui
+
 package gui
 
 import (
@@ -34,18 +36,20 @@ type page struct {
 	step     int // 1..3, or 0 when the screen is not part of setup
 }
 
-// navItemDef is one sidebar destination.
+// navItemDef is one sidebar destination. The icon is a function rather than a
+// resource because theme lookups need a running app, and package-level
+// variables are initialised before Run has started one.
 type navItemDef struct {
 	screen screen
 	label  string
-	icon   fyne.Resource
+	icon   func() fyne.Resource
 }
 
 var navItems = []navItemDef{
-	{scrOverview, "Overview", theme.HomeIcon()},
-	{scrNewKey, "New key", theme.ContentAddIcon()},
-	{scrKeys, "Keys", theme.StorageIcon()},
-	{scrAgent, "SSH agent", theme.ComputerIcon()},
+	{scrOverview, "Overview", theme.HomeIcon},
+	{scrNewKey, "New key", theme.ContentAddIcon},
+	{scrKeys, "Keys", theme.StorageIcon},
+	{scrAgent, "SSH agent", theme.ComputerIcon},
 }
 
 // stepTitles name the three stages of the guided setup flow.
@@ -99,7 +103,7 @@ func (s *shell) rail() fyne.CanvasObject {
 	navList := vStack(gapXS)
 	for _, item := range navItems {
 		def := item
-		navList.Add(navItem(def.icon, def.label, ui.screen == def.screen, func() {
+		navList.Add(navItem(def.icon(), def.label, ui.screen == def.screen, func() {
 			ui.navigate(def.screen)
 		}))
 	}

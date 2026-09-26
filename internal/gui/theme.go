@@ -1,3 +1,5 @@
+//go:build !tui
+
 // Package gui renders the SSH key manager as a Fyne desktop application.
 package gui
 
